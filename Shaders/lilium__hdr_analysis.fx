@@ -178,7 +178,7 @@ uniform float CIE_DIAGRAM_BRIGHTNESS
   ui_min      = 10.f;
   ui_max      = 250.f;
   ui_step     = 0.5f;
-> = 80.f;
+> = 203.f;
 
 uniform float CIE_DIAGRAM_SIZE
 <
@@ -186,10 +186,10 @@ uniform float CIE_DIAGRAM_SIZE
   ui_label    = "CIE diagram size";
   ui_type     = "slider";
   ui_units    = "%%";
-  ui_min      = 50.f;
+  ui_min      = 0.1f;
   ui_max      = 100.f;
   ui_step     = 0.1f;
-> = 100.f;
+> = 100.f * (BUFFER_HEIGHT / 2560.f);
 
 uniform int CIE_SPACER_0
 <
@@ -299,7 +299,7 @@ uniform float BRIGHTNESS_HISTOGRAM_BRIGHTNESS
   ui_min      = 10.f;
   ui_max      = 250.f;
   ui_step     = 0.5f;
-> = 80.f;
+> = 203.0f;
 
 uniform float BRIGHTNESS_HISTOGRAM_SIZE
 <
@@ -307,10 +307,10 @@ uniform float BRIGHTNESS_HISTOGRAM_SIZE
   ui_label    = "brightness histogram size";
   ui_type     = "slider";
   ui_units    = "%%";
-  ui_min      = 50.f;
+  ui_min      = 0.1f;
   ui_max      = 100.f;
   ui_step     = 0.1f;
-> = 70.f;
+> = 100.f * (BUFFER_HEIGHT / 2560.f);
 
 uniform int BRIGHTNESS_HISTOGRAM_SPACER_0
 <
@@ -2789,7 +2789,7 @@ void VS_PrepareHdrAnalysis(
   in                  uint   Id                                    : SV_VertexID,
   out                 float4 VPos                                  : SV_Position,
   out                 float2 TexCoord                              : TEXCOORD0,
-  out                 bool   PingPongChecks[2]                     : PingPongChecks,
+  out nointerpolation bool   PingPongChecks[2]                     : PingPongChecks,
   out                 float4 HighlightNitRange                     : HighlightNitRange,
   out nointerpolation uint2  BrightnessHistogramTextureDisplaySize : BrightnessHistogramTextureDisplaySize,
   out nointerpolation uint2  CieDiagramTextureDisplaySize          : CieDiagramTextureDisplaySize,
@@ -2934,7 +2934,7 @@ void PS_HdrAnalysis(
   in                  float4 VPos                                  : SV_Position,
   in                  float2 TexCoord                              : TEXCOORD,
   out                 float4 Output                                : SV_Target0,
-  in                  bool   PingPongChecks[2]                     : PingPongChecks,
+  in  nointerpolation bool   PingPongChecks[2]                     : PingPongChecks,
   in                  float4 HighlightNitRange                     : HighlightNitRange,
   in  nointerpolation uint2  BrightnessHistogramTextureDisplaySize : BrightnessHistogramTextureDisplaySize,
   in  nointerpolation uint2  CieDiagramTextureDisplaySize          : CieDiagramTextureDisplaySize,
