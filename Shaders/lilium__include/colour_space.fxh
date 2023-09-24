@@ -9,6 +9,10 @@
   #define BUFFER_COLOR_SPACE    2
 #endif
 
+#ifndef GAMESCOPE_SDR_ON_HDR_NITS
+#define GAMESCOPE_SDR_ON_HDR_NITS 203.f
+#endif
+
 #define VS_PostProcess PostProcessVS
 
 #define YES 1

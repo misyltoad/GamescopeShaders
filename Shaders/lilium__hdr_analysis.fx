@@ -60,7 +60,8 @@ uniform uint TEXT_SIZE
   ui_category = "Global";
   ui_label    = "text size";
   ui_type     = "combo";
-  ui_items    = "32\0"
+  ui_items    = "16\0"
+                "32\0"
                 "34\0"
                 "36\0"
                 "38\0"
@@ -80,7 +81,7 @@ uniform float TEXT_BRIGHTNESS
   ui_min      = 10.f;
   ui_max      = 250.f;
   ui_step     = 0.5f;
-> = 140.f;
+> = GAMESCOPE_SDR_ON_HDR_NITS;
 
 #define TEXT_POSITION_TOP_LEFT  0
 #define TEXT_POSITION_TOP_RIGHT 1
@@ -178,7 +179,7 @@ uniform float CIE_DIAGRAM_BRIGHTNESS
   ui_min      = 10.f;
   ui_max      = 250.f;
   ui_step     = 0.5f;
-> = 203.f;
+> = GAMESCOPE_SDR_ON_HDR_NITS;
 
 uniform float CIE_DIAGRAM_SIZE
 <
@@ -299,7 +300,7 @@ uniform float BRIGHTNESS_HISTOGRAM_BRIGHTNESS
   ui_min      = 10.f;
   ui_max      = 250.f;
   ui_step     = 0.5f;
-> = 203.0f;
+> = GAMESCOPE_SDR_ON_HDR_NITS;
 
 uniform float BRIGHTNESS_HISTOGRAM_SIZE
 <
@@ -670,45 +671,49 @@ void Testy(
 #endif //_TESTY
 
 
-uint2 GetCharSize()
+uint3 GetCharSize()
 {
   switch(TEXT_SIZE)
   {
-    case 8:
+    case 9:
     {
       return FONT_ATLAS_SIZE_48_CHAR_DIM;
     }
-    case 7:
+    case 8:
     {
       return FONT_ATLAS_SIZE_46_CHAR_DIM;
     }
-    case 6:
+    case 7:
     {
       return FONT_ATLAS_SIZE_44_CHAR_DIM;
     }
-    case 5:
+    case 6:
     {
       return FONT_ATLAS_SIZE_42_CHAR_DIM;
     }
-    case 4:
+    case 5:
     {
       return FONT_ATLAS_SIZE_40_CHAR_DIM;
     }
-    case 3:
+    case 4:
     {
       return FONT_ATLAS_SIZE_38_CHAR_DIM;
     }
-    case 2:
+    case 3:
     {
       return FONT_ATLAS_SIZE_36_CHAR_DIM;
     }
-    case 1:
+    case 2:
     {
       return FONT_ATLAS_SIZE_34_CHAR_DIM;
     }
-    default:
+    case 1:
     {
       return FONT_ATLAS_SIZE_32_CHAR_DIM;
+    }
+    default:
+    {
+      return FONT_ATLAS_SIZE_16_CHAR_DIM;
     }
   }
 }
@@ -853,8 +858,8 @@ void CS_PrepareOverlay(uint3 ID : SV_DispatchThreadID)
                   (SHOW_CSP_FROM_CURSOR ? 18
                                         : 0));
 
-    uint2 charSize = GetCharSize();
-    uint2 activeTextArea = charSize
+    uint3 charSize = GetCharSize();
+    uint2 activeTextArea = (charSize.xy / charSize.z)
                          * uint2(activeCharacters, activeLines);
     activeTextArea.x += OUTER_SPACING_X2;
     activeTextArea.y += (max(SHOW_CLL_VALUES
@@ -899,17 +904,17 @@ void CS_PrepareOverlay(uint3 ID : SV_DispatchThreadID)
 
 void DrawChar(uint2 Char, float2 DrawOffset, float2 Id)
 {
-  uint2 charSize   = GetCharSize();
+  uint3 charSize   = GetCharSize();
   uint  fontSize   = 8 - TEXT_SIZE;
   uint2 atlasXY    = uint2(fontSize % 3, fontSize / 3) * FONT_ATLAS_OFFSET;
-  uint2 charOffset = Char * charSize + atlasXY;
-  for (uint y = 0; y < charSize.y; y++)
+  uint2 charOffset = Char * charSize.xy + atlasXY;
+  for (uint y = 0; y < charSize.y / charSize.z; y++)
   {
-    for (uint x = 0; x < charSize.x; x++)
+    for (uint x = 0; x < charSize.x / charSize.z; x++)
     {
       uint2 currentOffset = uint2(x, y);
-      float4 pixel = tex2Dfetch(SamplerFontAtlasConsolidated, charOffset + currentOffset).rgba;
-      tex2Dstore(StorageTextOverlay, (Id + DrawOffset) * charSize + OUTER_SPACING + currentOffset, pixel);
+      float4 pixel = tex2Dfetch(SamplerFontAtlasConsolidated, charOffset + (currentOffset * charSize.z)).rgba;
+      tex2Dstore(StorageTextOverlay, (Id + DrawOffset) * (charSize.xy / charSize.z) + OUTER_SPACING + currentOffset, pixel);
     }
   }
 }
@@ -2904,8 +2909,8 @@ void VS_PrepareHdrAnalysis(
                   (SHOW_CSP_FROM_CURSOR ? 18
                                         : 0));
 
-    uint2 charSize = GetCharSize();
-    uint2 currentOverlayDimensions = charSize
+    uint3 charSize = GetCharSize();
+    uint2 currentOverlayDimensions = (charSize.xy / charSize.z)
                                    * uint2(activeCharacters, activeLines);
     currentOverlayDimensions.x += OUTER_SPACING_X2;
     currentOverlayDimensions.y += (max(SHOW_CLL_VALUES
