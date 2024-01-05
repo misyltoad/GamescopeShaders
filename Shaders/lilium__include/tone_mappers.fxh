@@ -3,8 +3,7 @@
 #include "hdr_analysis.fxh"
 
 
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
+#if (defined(IS_HDR_COMPATIBLE_API) \
   && defined(IS_POSSIBLE_HDR_CSP))
 
 
@@ -16,52 +15,50 @@ namespace Tmos
 
   // Rep. ITU-R BT.2446-1 Table 2 & 3
   void Bt2446A(
-         inout float3 Colour,
-               float  MaxCll,
-               float  TargetCll,
-               float  GamutCompression)
+    inout float3 Colour,
+          float  MaxNits,
+          float  TargetNits,
+          float  GamutCompression)
   {
     // adjust the max of 1 according to maxCLL
-    Colour *= (10000.f / MaxCll);
+    Colour *= (10000.f / MaxNits);
 
     // non-linear transfer function RGB->R'G'B'
     Colour = pow(Colour, applyGamma);
 
 #define ycbcr Colour
     //to Y'C'bC'r
-    ycbcr = Csp::Ycbcr::FromRgb::Bt2020(Colour);
+    ycbcr = Csp::Ycbcr::RgbTo::YcbcrBt2020(Colour);
 
     // tone mapping step 1
     //pHDR
-    float pHdr = 1.f + 32.f * pow(MaxCll /
+    float pHdr = 1.f + 32.f * pow(MaxNits /
                                   10000.f
                               , applyGamma);
 
     //Y'p
-    float y = (log(1.f + (pHdr - 1.f) * ycbcr.x)) /
-              log(pHdr);
+    float yP = (log(1.f + (pHdr - 1.f) * ycbcr.x)) /
+               log(pHdr);
 
     // tone mapping step 2
     //Y'c
-    y = y <= 0.7399f
-      ? 1.0770f * y
-      : y > 0.7399f && y < 0.9909f
-      ? (-1.1510f * pow(y , 2)) + (2.7811f * y) - 0.6302f
-      : (0.5000f * y) + 0.5000f;
+    float yC = yP <= 0.7399f                ? 1.0770f * yP
+             : yP > 0.7399f && yP < 0.9909f ? (-1.1510f * (yP * yP)) + (2.7811f * yP) - 0.6302f
+                                            : (0.5000f * yP) + 0.5000f;
 
     // tone mapping step 3
     //pSDR
     float pSdr = 1.f + 32.f * pow(
-                                  TargetCll /
+                                  TargetNits /
                                   10000.f
                               , applyGamma);
 
     //Y'SDR
-    y = (pow(pSdr, y) - 1.f) /
-        (pSdr - 1.f);
+    float ySdr = (pow(pSdr, yC) - 1.f) /
+                 (pSdr - 1.f);
 
     //f(Y'SDR)
-    float colourScaling = y /
+    float colourScaling = ySdr /
                           (GamutCompression * ycbcr.x);
 
     //C'b,tmo
@@ -71,35 +68,35 @@ namespace Tmos
     float crTmo = colourScaling * ycbcr.z;
 
     //Y'tmo
-    float yTmo = y - max(0.1f * crTmo, 0.f);
+    float yTmo = ySdr - max(0.1f * crTmo, 0.f);
 
-    Colour = Csp::Ycbcr::ToRgb::Bt2020(float3(yTmo,
-                                              cbTmo,
-                                              crTmo));
+    Colour = Csp::Ycbcr::YcbcrTo::RgbBt2020(float3(yTmo,
+                                                   cbTmo,
+                                                   crTmo));
 
     // avoid invalid colours
     Colour = max(Colour, 0.f);
 
-    // gamma decompression and adjust to TargetCll
-    Colour = pow(Colour, removeGamma) * (TargetCll / 10000.f);
+    // gamma decompression and adjust to TargetNits
+    Colour = pow(Colour, removeGamma) * (TargetNits / 10000.f);
   }
 
   void Bt2446A_MOD1(
          inout float3 Colour,
-               float  MaxCll,
-               float  TargetCll,
+               float  MaxNits,
+               float  TargetNits,
                float  GamutCompression,
                float  TestH,
                float  TestS)
   {
     // adjust the max of 1 according to maxCLL
-    Colour *= (10000.f / MaxCll);
+    Colour *= (10000.f / MaxNits);
 
     // non-linear transfer function RGB->R'G'B'
     Colour = pow(Colour, applyGamma);
 
     //to Y'C'bC'r
-    ycbcr = Csp::Ycbcr::FromRgb::Bt2020(Colour);
+    ycbcr = Csp::Ycbcr::RgbTo::YcbcrBt2020(Colour);
 
     // tone mapping step 1
     //pHDR
@@ -144,15 +141,15 @@ namespace Tmos
     //Y'tmo
     float yTmo = y - max(0.1f * crTmo, 0.f);
 
-    Colour = Csp::Ycbcr::ToRgb::Bt2020(float3(yTmo,
+    Colour = Csp::Ycbcr::YcbcrTo::RgbBt2020(float3(yTmo,
                                               cbTmo,
                                               crTmo));
 
     // avoid invalid colours
     Colour = max(Colour, 0.f);
 
-    // gamma decompression and adjust to TargetCll
-    Colour = pow(Colour, removeGamma) * (TargetCll / 10000.f);
+    // gamma decompression and adjust to TargetNits
+    Colour = pow(Colour, removeGamma) * (TargetNits / 10000.f);
   }
 
   namespace Bt2390
@@ -197,7 +194,7 @@ namespace Tmos
       if (ProcessingMode == BT2390_PRO_MODE_ICTCP)
       {
         //to L'M'S'
-        Colour = Csp::Trc::ToPq(Csp::Ictcp::Mat::Bt2020To::Lms(Colour));
+        Colour = Csp::Trc::LinearTo::Pq(Csp::Ictcp::Mat::Bt2020To::Lms(Colour));
 
         float i1 = 0.5f * Colour.x + 0.5f * Colour.y;
         //E1
@@ -209,10 +206,12 @@ namespace Tmos
         {
           HermiteSpline(i2, KneeStart, MaxLum);
         }
+#if (SHOW_ADAPTIVE_MAX_NITS == NO)
         else if (MinLum == 0.f)
         {
           discard;
         }
+#endif
 
         //E3
         i2 += MinLum * pow((1.f - i2), 4.f);
@@ -226,18 +225,18 @@ namespace Tmos
         //to L'M'S'
         Colour = Csp::Ictcp::Mat::IctcpTo::PqLms(
                    float3(i2,
-                          dot(Colour, Csp::Ictcp::Mat::PqLmsToIctcp[1]) * minI,
-                          dot(Colour, Csp::Ictcp::Mat::PqLmsToIctcp[2]) * minI));
+                          dot(Colour, PqLmsToIctcp[1]) * minI,
+                          dot(Colour, PqLmsToIctcp[2]) * minI));
 
         //to LMS
-        Colour = Csp::Trc::FromPq(Colour);
+        Colour = Csp::Trc::PqTo::Linear(Colour);
         //to RGB
         Colour = max(Csp::Ictcp::Mat::LmsTo::Bt2020(Colour), 0.f);
 
       }
       else if (ProcessingMode == BT2390_PRO_MODE_YCBCR)
       {
-        float y1 = dot(Colour, Csp::KHelpers::Bt2020::K);
+        float y1 = dot(Colour, KBt2020);
         //E1
         float y2 = (y1 - SrcMinPq) / SrcMaxPqMinusSrcMinPq;
         //float y2 = y1 / SrcMaxPq;
@@ -247,10 +246,12 @@ namespace Tmos
         {
           HermiteSpline(y2, KneeStart, MaxLum);
         }
+#if (SHOW_ADAPTIVE_MAX_NITS == NO)
         else if (MinLum == 0.f)
         {
           discard;
         }
+#endif
 
         //E3
         y2 += MinLum * pow((1.f - y2), 4.f);
@@ -262,10 +263,10 @@ namespace Tmos
         float minY = min((y1 / y2), (y2 / y1));
 
         Colour = max(
-                   Csp::Ycbcr::ToRgb::Bt2020(
+                   Csp::Ycbcr::YcbcrTo::RgbBt2020(
                      float3(y2,
-                            (Colour.b - y1) / Csp::KHelpers::Bt2020::Kb * minY,
-                            (Colour.r - y1) / Csp::KHelpers::Bt2020::Kr * minY))
+                            (Colour.b - y1) / KbBt2020 * minY,
+                            (Colour.r - y1) / KrBt2020 * minY))
                  , 0.f);
 
       }
@@ -273,18 +274,20 @@ namespace Tmos
       {
         float y1 = dot(Colour, Csp::Mat::Bt2020ToXYZ[1].rgb);
         //E1
-        float y2 = (Csp::Trc::ToPq(y1) - SrcMinPq) / SrcMaxPqMinusSrcMinPq;
-        //float y2 = Csp::Trc::ToPq(y1) / SrcMaxPq;
+        float y2 = (Csp::Trc::LinearTo::Pq(y1) - SrcMinPq) / SrcMaxPqMinusSrcMinPq;
+        //float y2 = Csp::Trc::LinearTo::Pq(y1) / SrcMaxPq;
 
         //E2
         if (y2 >= KneeStart)
         {
           HermiteSpline(y2, KneeStart, MaxLum);
         }
+#if (SHOW_ADAPTIVE_MAX_NITS == NO)
         else if (MinLum == 0.f)
         {
           discard;
         }
+#endif
 
         //E3
         y2 += MinLum * pow((1.f - y2), 4.f);
@@ -293,7 +296,7 @@ namespace Tmos
         y2 = y2 * SrcMaxPqMinusSrcMinPq + SrcMinPq;
         //y2 *= SrcMaxPq;
 
-        y2 = Csp::Trc::FromPq(y2);
+        y2 = Csp::Trc::PqTo::Linear(y2);
 
         Colour = max(y2 / y1 * Colour, 0.f);
 
@@ -355,7 +358,7 @@ namespace Tmos
 
 //      return Channel < ShoulderStartInPq
 //           ? Channel
-//           : (TargetCll - ShoulderStart)
+//           : (TargetNits - ShoulderStart)
 //           * RangeCompress((Channel       - ShoulderStartInPq) /
 //                           (TargetCllInPq - ShoulderStartInPq))
 //           + ShoulderStartInPq;
@@ -414,17 +417,19 @@ namespace Tmos
       if (ProcessingMode == DICE_PRO_MODE_ICTCP)
       {
         //to L'M'S'
-        Colour = Csp::Trc::ToPq(Csp::Ictcp::Mat::Bt2020To::Lms(Colour));
+        Colour = Csp::Trc::LinearTo::Pq(Csp::Ictcp::Mat::Bt2020To::Lms(Colour));
 
 //        //to L'M'S'
-//        Colour = Csp::Trc::ToPq(mul(RgbToLms, Colour));
+//        Colour = Csp::Trc::LinearTo::Pq(mul(RgbToLms, Colour));
 
         //Intensity
         float i1 = 0.5f * Colour.x + 0.5f * Colour.y;
 
         if (i1 < ShoulderStartInPq)
         {
+#if (SHOW_ADAPTIVE_MAX_NITS == NO)
           discard;
+#endif
         }
         else
         {
@@ -435,11 +440,11 @@ namespace Tmos
           //to L'M'S'
           Colour = Csp::Ictcp::Mat::IctcpTo::PqLms(
                     float3(i2,
-                           dot(Colour, Csp::Ictcp::Mat::PqLmsToIctcp[1]) * minI,
-                           dot(Colour, Csp::Ictcp::Mat::PqLmsToIctcp[2]) * minI));
+                           dot(Colour, PqLmsToIctcp[1]) * minI,
+                           dot(Colour, PqLmsToIctcp[2]) * minI));
 
           //to LMS
-          Colour = Csp::Trc::FromPq(Colour);
+          Colour = Csp::Trc::PqTo::Linear(Colour);
           //to RGB
           Colour = max(Csp::Ictcp::Mat::LmsTo::Bt2020(Colour), 0.f);
 
@@ -449,13 +454,15 @@ namespace Tmos
       }
       else
       {
-        float y1 = dot(Colour, Csp::KHelpers::Bt2020::K);
+        float y1 = dot(Colour, KBt2020);
 
         //float y1 = dot(Colour, KFactors);
 
         if (y1 < ShoulderStartInPq)
         {
+#if (SHOW_ADAPTIVE_MAX_NITS == NO)
           discard;
+#endif
         }
         else
         {
@@ -465,10 +472,10 @@ namespace Tmos
 
           //to RGB
           Colour = max(
-                     Csp::Ycbcr::ToRgb::Bt2020(
+                     Csp::Ycbcr::YcbcrTo::RgbBt2020(
                        float3(y2,
-                              (Colour.b - y1) / Csp::KHelpers::Bt2020::Kb * minY,
-                              (Colour.r - y1) / Csp::KHelpers::Bt2020::Kr * minY))
+                              (Colour.b - y1) / KbBt2020 * minY,
+                              (Colour.r - y1) / KrBt2020 * minY))
                    , 0.f);
 
 //          float cb2 = (Colour.b - y1) / KbHelper * minY;

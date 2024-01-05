@@ -3,13 +3,7 @@
 #include "colour_space.fxh"
 
 
-// TODO:
-// - rework "DISPATCH_DOESNT_OVERFLOW"
-// - fix CIE diagram texture offset
-
-
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
+#if (defined(IS_HDR_COMPATIBLE_API) \
   && defined(IS_POSSIBLE_HDR_CSP))
 
 //max is 32
@@ -61,21 +55,26 @@ static const uint HEIGHT0 = BUFFER_HEIGHT / 2;
 static const uint HEIGHT1 = BUFFER_HEIGHT - HEIGHT0;
 
 
-#ifdef HDR_ANALYSIS_ENABLE
+#if defined(HDR_ANALYSIS_ENABLE)
 
 
 #include "draw_font.fxh"
 
-#define SMALLEST_FP16   0.00000009
-#define SMALLEST_UINT10 0.00013
+// 0.0000000894069671630859375 = ((ieee754_half_decode(0x0002)
+//                               - ieee754_half_decode(0x0001))
+//                              / 2)
+//                             + ieee754_half_decode(0x0001)
+#define SMALLEST_FP16   asfloat(0x33C00000)
+// 0.0014662756584584712982177734375 = 1.5 / 1023
+#define SMALLEST_UINT10 asfloat(0x3AC0300C)
 
 
 //#ifndef IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION
-  #define IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION YES
+  #define IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION NO
 //#endif
 
 
-precise static const float PIXELS = BUFFER_WIDTH * BUFFER_HEIGHT;
+precise static const float PIXELS = uint(BUFFER_WIDTH) * uint(BUFFER_HEIGHT);
 
 
 #define IS_CSP_BT709   0
@@ -85,21 +84,17 @@ precise static const float PIXELS = BUFFER_WIDTH * BUFFER_HEIGHT;
 #define IS_CSP_INVALID 4
 
 
-uniform float2 PINGPONG
+uniform float FRAMETIME
 <
-  source    = "pingpong";
-  min       = 0;
-  max       = 1;
-  step      = 1;
-  smoothing = 0.0;
+  source = "frametime";
 >;
 
 
-#define TEXTURE_OVERLAY_WIDTH FONT_ATLAS_SIZE_48_CHAR_DIM.x * 29
-#ifdef IS_FLOAT_HDR_CSP
-  #define TEXTURE_OVERLAY_HEIGHT FONT_ATLAS_SIZE_48_CHAR_DIM.y * 16
+#define TEXTURE_OVERLAY_WIDTH FONT_SIZE_56_CHAR_DIM.x * 29
+#if defined(IS_FLOAT_HDR_CSP)
+  #define TEXTURE_OVERLAY_HEIGHT FONT_SIZE_56_CHAR_DIM.y * 16
 #else
-  #define TEXTURE_OVERLAY_HEIGHT FONT_ATLAS_SIZE_48_CHAR_DIM.y * 13
+  #define TEXTURE_OVERLAY_HEIGHT FONT_SIZE_56_CHAR_DIM.y * 13
 #endif //IS_FLOAT_HDR_CSP
 
 texture2D TextureTextOverlay
@@ -124,7 +119,7 @@ storage2D StorageTextOverlay
 
 #endif //HDR_ANALYSIS_ENABLE
 
-texture2D TextureCllValues
+texture2D TextureNitsValues
 <
   pooled = true;
 >
@@ -135,18 +130,23 @@ texture2D TextureCllValues
   Format = R32F;
 };
 
-sampler2D<float> SamplerCllValues
+sampler2D<float> SamplerNitsValues
 {
-  Texture = TextureCllValues;
+  Texture = TextureNitsValues;
 };
 
-#ifdef HDR_ANALYSIS_ENABLE
+storage2D<float> StorageNitsValues
+{
+  Texture = TextureNitsValues;
+};
+
+#if defined(HDR_ANALYSIS_ENABLE)
 
 #if 0
 static const uint _0_Dot_01_Percent_Pixels = BUFFER_WIDTH * BUFFER_HEIGHT * 0.01f;
 static const uint _0_Dot_01_Percent_Texture_Width = _0_Dot_01_Percent_Pixels / 16;
 
-texture2D TextureMaxCll0Dot01Percent
+texture2D TextureMaxNits0Dot01Percent
 <
   pooled = true;
 >
@@ -157,280 +157,67 @@ texture2D TextureMaxCll0Dot01Percent
   Format = R32F;
 };
 
-sampler2D<float> SamplerMaxCll0Dot01Percent
+sampler2D<float> SamplerMaxNits0Dot01Percent
 {
-  Texture = TextureMaxCll0Dot01Percent;
+  Texture = TextureMaxNits0Dot01Percent;
 };
 
-storage2D<float> StorageMaxCll0Dot01Percent
+storage2D<float> StorageMaxNits0Dot01Percent
 {
-  Texture = TextureMaxCll0Dot01Percent;
+  Texture = TextureMaxNits0Dot01Percent;
 };
 #endif
 
 
-#define CIE_1931 0
-#define CIE_1976 1
+#define CIE_TEXTURE_ENTRY_DIAGRAM_COLOUR   0
+#define CIE_TEXTURE_ENTRY_DIAGRAM_BLACK_BG 1
+#define CIE_TEXTURE_ENTRY_BT709_OUTLINE    2
+#define CIE_TEXTURE_ENTRY_DCI_P3_OUTLINE   3
+#define CIE_TEXTURE_ENTRY_BT2020_OUTLINE   4
+#define CIE_TEXTURE_ENTRY_AP0_OUTLINE      5
 
-#ifndef CIE_DIAGRAM
-  #define CIE_DIAGRAM CIE_1931
-#endif
+//width and height description are in lilium__hdr_analysis.fx
 
-#define CIE_BG_BORDER  50
-
-#define CIE_1931_WIDTH     736
-#define CIE_1931_HEIGHT    837
-#define CIE_1931_BG_WIDTH  835
-#define CIE_1931_BG_HEIGHT 935
-
-#if (CIE_DIAGRAM == CIE_1931)
-
-texture2D TextureCie1931
+texture2D TextureCieConsolidated
 <
-  source = "lilium__cie_1931.png";
+  source = CIE_TEXTURE_FILE_NAME;
   pooled = true;
 >
 {
-  Width  = CIE_1931_WIDTH;
-  Height = CIE_1931_HEIGHT;
+  Width  = CIE_TEXTURE_WIDTH;
+  Height = CIE_TEXTURE_HEIGHT;
   Format = RGBA8;
 };
 
-sampler2D SamplerCie1931
+sampler2D<float4> SamplerCieConsolidated
 {
-  Texture = TextureCie1931;
+  Texture = TextureCieConsolidated;
 };
 
-texture2D TextureCie1931BlackBg
-<
-  source = "lilium__cie_1931_black_bg.png";
-  pooled = true;
->
+storage2D<float4> StorageCieConsolidated
 {
-  Width  = CIE_1931_BG_WIDTH;
-  Height = CIE_1931_BG_HEIGHT;
-  Format = RGBA8;
+  Texture = TextureCieConsolidated;
 };
 
-sampler2D SamplerCie1931BlackBg
-{
-  Texture = TextureCie1931BlackBg;
-};
-
-texture2D TextureCie1931Current
+texture2D TextureCieCurrent
 <
   pooled = true;
 >
 {
   Width  = CIE_1931_BG_WIDTH;
   Height = CIE_1931_BG_HEIGHT;
-
   Format = RGBA8;
 };
 
-sampler2D SamplerCie1931Current
+sampler2D<float4> SamplerCieCurrent
 {
-  Texture   = TextureCie1931Current;
-  MagFilter = POINT;
+  Texture = TextureCieCurrent;
 };
 
-storage2D StorageCie1931Current
+storage2D<float4> StorageCieCurrent
 {
-  Texture = TextureCie1931Current;
+  Texture = TextureCieCurrent;
 };
-
-texture2D TextureCie1931CspTriangleBt709
-<
-  source = "lilium__cie_1931_csp_triangle_bt.709.png";
-  pooled = true;
->
-{
-  Width  = CIE_1931_BG_WIDTH;
-  Height = CIE_1931_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1931CspTriangleBt709
-{
-  Texture = TextureCie1931CspTriangleBt709;
-};
-
-texture2D TextureCie1931CspTriangleDciP3
-<
-  source = "lilium__cie_1931_csp_triangle_dci-p3.png";
-  pooled = true;
->
-{
-  Width  = CIE_1931_BG_WIDTH;
-  Height = CIE_1931_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1931CspTriangleDciP3
-{
-  Texture = TextureCie1931CspTriangleDciP3;
-};
-
-texture2D TextureCie1931CspTriangleBt2020
-<
-  source = "lilium__cie_1931_csp_triangle_bt.2020.png";
-  pooled = true;
->
-{
-  Width  = CIE_1931_BG_WIDTH;
-  Height = CIE_1931_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1931CspTriangleBt2020
-{
-  Texture = TextureCie1931CspTriangleBt2020;
-};
-
-texture2D TextureCie1931CspTriangleAp0
-<
-  source = "lilium__cie_1931_csp_triangle_ap0.png";
-  pooled = true;
->
-{
-  Width  = CIE_1931_BG_WIDTH;
-  Height = CIE_1931_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1931CspTriangleAp0
-{
-  Texture = TextureCie1931CspTriangleAp0;
-};
-
-#endif
-
-#define CIE_1976_WIDTH     625
-#define CIE_1976_HEIGHT    589
-#define CIE_1976_BG_WIDTH  725
-#define CIE_1976_BG_HEIGHT 689
-
-#if (CIE_DIAGRAM == CIE_1976)
-
-texture2D TextureCie1976
-<
-  source = "lilium__cie_1976_ucs.png";
-  pooled = true;
->
-{
-  Width  = CIE_1976_WIDTH;
-  Height = CIE_1976_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976
-{
-  Texture = TextureCie1976;
-};
-
-texture2D TextureCie1976BlackBg
-<
-  source = "lilium__cie_1976_ucs_black_bg.png";
-  pooled = true;
->
-{
-  Width  = CIE_1976_BG_WIDTH;
-  Height = CIE_1976_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976BlackBg
-{
-  Texture = TextureCie1976BlackBg;
-};
-
-texture2D TextureCie1976Current
-<
-  pooled = true;
->
-{
-  Width  = CIE_1976_BG_WIDTH;
-  Height = CIE_1976_BG_HEIGHT;
-
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976Current
-{
-  Texture   = TextureCie1976Current;
-  MagFilter = POINT;
-};
-
-storage2D StorageCie1976Current
-{
-  Texture  = TextureCie1976Current;
-};
-
-texture2D TextureCie1976CspTriangleBt709
-<
-  source = "lilium__cie_1976_ucs_csp_triangle_bt.709.png";
-  pooled = true;
->
-{
-  Width  = CIE_1976_BG_WIDTH;
-  Height = CIE_1976_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976CspTriangleBt709
-{
-  Texture = TextureCie1976CspTriangleBt709;
-};
-
-texture2D TextureCie1976CspTriangleDciP3
-<
-  source = "lilium__cie_1976_ucs_csp_triangle_dci-p3.png";
-  pooled = true;
->
-{
-  Width  = CIE_1976_BG_WIDTH;
-  Height = CIE_1976_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976CspTriangleDciP3
-{
-  Texture = TextureCie1976CspTriangleDciP3;
-};
-
-texture2D TextureCie1976CspTriangleBt2020
-<
-  source = "lilium__cie_1976_ucs_csp_triangle_bt.2020.png";
-  pooled = true;
->
-{
-  Width  = CIE_1976_BG_WIDTH;
-  Height = CIE_1976_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976CspTriangleBt2020
-{
-  Texture = TextureCie1976CspTriangleBt2020;
-};
-
-texture2D TextureCie1976CspTriangleAp0
-<
-  source = "lilium__cie_1976_ucs_csp_triangle_ap0.png";
-  pooled = true;
->
-{
-  Width  = CIE_1976_BG_WIDTH;
-  Height = CIE_1976_BG_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerCie1976CspTriangleAp0
-{
-  Texture = TextureCie1976CspTriangleAp0;
-};
-
-#endif
 
 
 texture2D TextureCsps
@@ -446,76 +233,93 @@ texture2D TextureCsps
 
 sampler2D SamplerCsps
 {
-  Texture    = TextureCsps;
-  MipLODBias = 0;
+  Texture = TextureCsps;
 };
 
 
-static const uint TEXTURE_BRIGHTNESS_HISTOGRAM_WIDTH  = 1820;
-static const uint TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT = 1024;
+static const float TEXTURE_LUMINANCE_WAVEFORM_BUFFER_WIDTH_FACTOR  = float(BUFFER_WIDTH)
+                                                                   / float(TEXTURE_LUMINANCE_WAVEFORM_WIDTH);
 
-static const float TEXTURE_BRIGHTNESS_HISTOGRAM_BUFFER_WIDTH_FACTOR  =
-  (BUFFER_WIDTH  - 1.f) / (TEXTURE_BRIGHTNESS_HISTOGRAM_WIDTH - 1.f);
-static const float TEXTURE_BRIGHTNESS_HISTOGRAM_BUFFER_HEIGHT_FACTOR =
-  (BUFFER_HEIGHT - 1.f) / (TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT - 1.f);
+static const float TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR = (float(BUFFER_WIDTH)  / 3840.f
+                                                             + float(BUFFER_HEIGHT) / 2160.f)
+                                                            / 2.f;
 
-static const uint TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_WIDTH  = 2130;
-static const uint TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_HEIGHT = 1150;
+static const uint TEXTURE_LUMINANCE_WAVEFORM_SCALE_BORDER = TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR * 35.f + 0.5f;
+static const uint TEXTURE_LUMINANCE_WAVEFORM_SCALE_FRAME  = TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR *  7.f + 0.5f;
 
-static const float TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_FACTOR_X =
-  (TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_WIDTH  - 1.f) / (TEXTURE_BRIGHTNESS_HISTOGRAM_WIDTH  - 1.f);
-static const float TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_FACTOR_Y =
-  (TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_HEIGHT - 1.f) / (TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT - 1.f);
+//static const uint TEXTURE_LUMINANCE_WAVEFORM_FONT_SIZE =
+//  clamp(uint(round(TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR * 27.f + 5.f)), 14, 32);
 
-texture2D TextureBrightnessHistogram
+static const uint TEXTURE_LUMINANCE_WAVEFORM_SCALE_WIDTH  = TEXTURE_LUMINANCE_WAVEFORM_WIDTH
+                                                          + (WAVE_FONT_SIZE_32_CHAR_DIM.x * 8) //8 chars for 10000.00
+                                                          + uint(WAVE_FONT_SIZE_32_CHAR_DIM.x / 2.f + 0.5f)
+                                                          + (TEXTURE_LUMINANCE_WAVEFORM_SCALE_BORDER * 2)
+                                                          + (TEXTURE_LUMINANCE_WAVEFORM_SCALE_FRAME  * 3);
+
+static const uint TEXTURE_LUMINANCE_WAVEFORM_SCALE_HEIGHT = TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT
+                                                          + uint(WAVE_FONT_SIZE_32_CHAR_DIM.y / 2.f - TEXTURE_LUMINANCE_WAVEFORM_SCALE_FRAME + 0.5f)
+                                                          + (TEXTURE_LUMINANCE_WAVEFORM_SCALE_BORDER * 2)
+                                                          + (TEXTURE_LUMINANCE_WAVEFORM_SCALE_FRAME  * 2);
+
+static const float TEXTURE_LUMINANCE_WAVEFORM_SCALE_FACTOR_X = (TEXTURE_LUMINANCE_WAVEFORM_SCALE_WIDTH - 1.f)
+                                                             / float(TEXTURE_LUMINANCE_WAVEFORM_WIDTH  - 1);
+
+static const float TEXTURE_LUMINANCE_WAVEFORM_SCALE_FACTOR_Y = (TEXTURE_LUMINANCE_WAVEFORM_SCALE_HEIGHT     - 1.f)
+                                                             / float(TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - 1);
+
+texture2D TextureLuminanceWaveform
 <
   pooled = true;
 >
 {
-  Width  = TEXTURE_BRIGHTNESS_HISTOGRAM_WIDTH;
-  Height = TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT;
+  Width  = TEXTURE_LUMINANCE_WAVEFORM_WIDTH;
+  Height = TEXTURE_LUMINANCE_WAVEFORM_HEIGHT;
   Format = RGBA16;
 };
 
-sampler2D SamplerBrightnessHistogram
+sampler2D SamplerLuminanceWaveform
 {
-  Texture = TextureBrightnessHistogram;
+  Texture = TextureLuminanceWaveform;
 };
 
-storage2D StorageBrightnessHistogram
+storage2D StorageLuminanceWaveform
 {
-  Texture = TextureBrightnessHistogram;
+  Texture = TextureLuminanceWaveform;
 };
 
-texture2D TextureBrightnessHistogramScale
-<
-  source = "lilium__brightness_histogram_scale.png";
-  pooled = true;
->
-{
-  Width  = TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_WIDTH;
-  Height = TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_HEIGHT;
-  Format = RGBA8;
-};
-
-sampler2D SamplerBrightnessHistogramScale
-{
-  Texture = TextureBrightnessHistogramScale;
-};
-
-texture2D TextureBrightnessHistogramFinal
+texture2D TextureLuminanceWaveformScale
 <
   pooled = true;
 >
 {
-  Width  = TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_WIDTH;
-  Height = TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_HEIGHT;
+  Width  = TEXTURE_LUMINANCE_WAVEFORM_SCALE_WIDTH;
+  Height = TEXTURE_LUMINANCE_WAVEFORM_SCALE_HEIGHT;
   Format = RGBA16;
 };
 
-sampler2D SamplerBrightnessHistogramFinal
+sampler2D<float4> SamplerLuminanceWaveformScale
 {
-  Texture   = TextureBrightnessHistogramFinal;
+  Texture = TextureLuminanceWaveformScale;
+};
+
+storage2D<float4> StorageLuminanceWaveformScale
+{
+  Texture = TextureLuminanceWaveformScale;
+};
+
+texture2D TextureLuminanceWaveformFinal
+<
+  pooled = true;
+>
+{
+  Width  = TEXTURE_LUMINANCE_WAVEFORM_SCALE_WIDTH;
+  Height = TEXTURE_LUMINANCE_WAVEFORM_SCALE_HEIGHT;
+  Format = RGBA16;
+};
+
+sampler2D SamplerLuminanceWaveformFinal
+{
+  Texture   = TextureLuminanceWaveformFinal;
   MagFilter = POINT;
 };
 
@@ -523,38 +327,38 @@ sampler2D SamplerBrightnessHistogramFinal
 
 // consolidated texture start
 
-#define INTERMEDIATE_CLL_VALUES_X_OFFSET 0
-#define INTERMEDIATE_CLL_VALUES_Y_OFFSET 0
+#define INTERMEDIATE_NITS_VALUES_X_OFFSET 0
+#define INTERMEDIATE_NITS_VALUES_Y_OFFSET 0
 
 
 #define CSP_COUNTER_X_OFFSET 0
 #define CSP_COUNTER_Y_OFFSET 6
 
 
-// (12) 4x max, avg and min CLL
-#define FINAL_4_CLL_VALUES_X_OFFSET 0
-#define FINAL_4_CLL_VALUES_Y_OFFSET 12
-static const int2 COORDS_FINAL_4_MAXCLL_VALUE0 = int2(     FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_AVGCLL_VALUE0 = int2( 1 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MINCLL_VALUE0 = int2( 2 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MAXCLL_VALUE1 = int2( 3 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_AVGCLL_VALUE1 = int2( 4 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MINCLL_VALUE1 = int2( 5 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MAXCLL_VALUE2 = int2( 6 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_AVGCLL_VALUE2 = int2( 7 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MINCLL_VALUE2 = int2( 8 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MAXCLL_VALUE3 = int2( 9 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_AVGCLL_VALUE3 = int2(10 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_FINAL_4_MINCLL_VALUE3 = int2(11 + FINAL_4_CLL_VALUES_X_OFFSET, FINAL_4_CLL_VALUES_Y_OFFSET);
+// (12) 4x max, avg and min Nits
+#define FINAL_4_NITS_VALUES_X_OFFSET 0
+#define FINAL_4_NITS_VALUES_Y_OFFSET 12
+static const int2 COORDS_FINAL_4_MAX_NITS_VALUE0 = int2(     FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_AVG_NITS_VALUE0 = int2( 1 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MIN_NITS_VALUE0 = int2( 2 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MAX_NITS_VALUE1 = int2( 3 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_AVG_NITS_VALUE1 = int2( 4 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MIN_NITS_VALUE1 = int2( 5 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MAX_NITS_VALUE2 = int2( 6 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_AVG_NITS_VALUE2 = int2( 7 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MIN_NITS_VALUE2 = int2( 8 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MAX_NITS_VALUE3 = int2( 9 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_AVG_NITS_VALUE3 = int2(10 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_FINAL_4_MIN_NITS_VALUE3 = int2(11 + FINAL_4_NITS_VALUES_X_OFFSET, FINAL_4_NITS_VALUES_Y_OFFSET);
 
 
-// (4) max, max 99.99%, avg and min CLL
-#define MAX_AVG_MIN_CLL_VALUES_X_OFFSET 12
-#define MAX_AVG_MIN_CLL_VALUES_Y_OFFSET 12
-static const int2 COORDS_MAXCLL_VALUE   = int2(    MAX_AVG_MIN_CLL_VALUES_X_OFFSET, MAX_AVG_MIN_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_MAXCLL99_VALUE = int2(1 + MAX_AVG_MIN_CLL_VALUES_X_OFFSET, MAX_AVG_MIN_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_AVGCLL_VALUE   = int2(2 + MAX_AVG_MIN_CLL_VALUES_X_OFFSET, MAX_AVG_MIN_CLL_VALUES_Y_OFFSET);
-static const int2 COORDS_MINCLL_VALUE   = int2(3 + MAX_AVG_MIN_CLL_VALUES_X_OFFSET, MAX_AVG_MIN_CLL_VALUES_Y_OFFSET);
+// (4) max, max 99.99%, avg and min Nits
+#define MAX_AVG_MIN_NITS_VALUES_X_OFFSET 12
+#define MAX_AVG_MIN_NITS_VALUES_Y_OFFSET 12
+static const int2 COORDS_MAX_NITS_VALUE   = int2(    MAX_AVG_MIN_NITS_VALUES_X_OFFSET, MAX_AVG_MIN_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_MAX_NITS99_VALUE = int2(1 + MAX_AVG_MIN_NITS_VALUES_X_OFFSET, MAX_AVG_MIN_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_AVG_NITS_VALUE   = int2(2 + MAX_AVG_MIN_NITS_VALUES_X_OFFSET, MAX_AVG_MIN_NITS_VALUES_Y_OFFSET);
+static const int2 COORDS_MIN_NITS_VALUE   = int2(3 + MAX_AVG_MIN_NITS_VALUES_X_OFFSET, MAX_AVG_MIN_NITS_VALUES_Y_OFFSET);
 
 
 // (6) CSP counter for BT.709, DCI-P3, BT.2020, AP0 and invalid
@@ -567,12 +371,12 @@ static const int2 COORDS_CSP_PERCENTAGE_AP0     = int2(3 + CSP_COUNTER_FINAL_X_O
 static const int2 COORDS_CSP_PERCENTAGE_INVALID = int2(4 + CSP_COUNTER_FINAL_X_OFFSET, CSP_COUNTER_FINAL_Y_OFFSET);
 
 
-// (9) show values for max, avg and min CLL plus CSP % for BT.709, DCI-P3, BT.2020, AP0 and invalid
+// (9) show values for max, avg and min Nits plus CSP % for BT.709, DCI-P3, BT.2020, AP0 and invalid
 #define SHOW_VALUES_X_OFFSET 22
 #define SHOW_VALUES_Y_OFFSET 12
-static const int2 COORDS_SHOW_MAXCLL             = int2(    SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
-static const int2 COORDS_SHOW_AVGCLL             = int2(1 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
-static const int2 COORDS_SHOW_MINCLL             = int2(2 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
+static const int2 COORDS_SHOW_MAX_NITS           = int2(    SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
+static const int2 COORDS_SHOW_AVG_NITS           = int2(1 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
+static const int2 COORDS_SHOW_MIN_NITS           = int2(2 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
 static const int2 COORDS_SHOW_PERCENTAGE_BT709   = int2(3 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
 static const int2 COORDS_SHOW_PERCENTAGE_DCI_P3  = int2(4 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
 static const int2 COORDS_SHOW_PERCENTAGE_BT2020  = int2(5 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
@@ -580,27 +384,27 @@ static const int2 COORDS_SHOW_PERCENTAGE_AP0     = int2(6 + SHOW_VALUES_X_OFFSET
 static const int2 COORDS_SHOW_PERCENTAGE_INVALID = int2(7 + SHOW_VALUES_X_OFFSET, SHOW_VALUES_Y_OFFSET);
 
 
-// (1) adaptive CLL for tone mapping
-#define ADAPTIVE_CLL_X_OFFSET 31
-#define ADAPTIVE_CLL_Y_OFFSET 12
-static const int2 COORDS_ADAPTIVE_CLL = int2(ADAPTIVE_CLL_X_OFFSET, ADAPTIVE_CLL_Y_OFFSET);
+// (1) adaptive Nits for tone mapping
+#define ADAPTIVE_NITS_X_OFFSET 31
+#define ADAPTIVE_NITS_Y_OFFSET 12
+static const int2 COORDS_ADAPTIVE_NITS = int2(ADAPTIVE_NITS_X_OFFSET, ADAPTIVE_NITS_Y_OFFSET);
 
 
-// (12) averaged CLL over the last 10 frames for adaptive CLL
-#define AVERAGE_MAXCLL_X_OFFSET 32
-#define AVERAGE_MAXCLL_Y_OFFSET 12
-static const int2 COORDS_AVERAGE_MAXCLL_CUR  = int2(     AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL0 = int2( 1 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL1 = int2( 2 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL2 = int2( 3 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL3 = int2( 4 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL4 = int2( 5 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL5 = int2( 6 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL6 = int2( 7 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL7 = int2( 8 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL8 = int2( 9 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGE_MAXCLL_CLL9 = int2(10 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
-static const int2 COORDS_AVERAGED_MAXCLL     = int2(11 + AVERAGE_MAXCLL_X_OFFSET, AVERAGE_MAXCLL_Y_OFFSET);
+// (12) averaged Nits over the last 10 frames for adaptive Nits
+#define AVERAGE_MAX_NITS_X_OFFSET 32
+#define AVERAGE_MAX_NITS_Y_OFFSET 12
+static const int2 COORDS_AVERAGE_MAX_NITS_CUR = int2(     AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_0   = int2( 1 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_1   = int2( 2 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_2   = int2( 3 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_3   = int2( 4 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_4   = int2( 5 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_5   = int2( 6 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_6   = int2( 7 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_7   = int2( 8 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_8   = int2( 9 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGE_MAX_NITS_9   = int2(10 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
+static const int2 COORDS_AVERAGED_MAX_NITS    = int2(11 + AVERAGE_MAX_NITS_X_OFFSET, AVERAGE_MAX_NITS_Y_OFFSET);
 
 
 // (6) check if redraw of text is needed for overlay
@@ -617,9 +421,23 @@ static const int2 COORDS_CHECK_OVERLAY_REDRAW4 = int2(5 + CHECK_OVERLAY_REDRAW_X
 // (3) offsets for overlay text blocks
 #define OVERLAY_TEXT_Y_OFFSETS_X_OFFSET 50
 #define OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET 12
-static const int2 COORDS_OVERLAY_TEXT_Y_OFFSET_CURSOR_CLL = int2(    OVERLAY_TEXT_Y_OFFSETS_X_OFFSET, OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET);
-static const int2 COORDS_OVERLAY_TEXT_Y_OFFSET_CSPS       = int2(1 + OVERLAY_TEXT_Y_OFFSETS_X_OFFSET, OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET);
-static const int2 COORDS_OVERLAY_TEXT_Y_OFFSET_CURSOR_CSP = int2(2 + OVERLAY_TEXT_Y_OFFSETS_X_OFFSET, OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET);
+static const int2 COORDS_OVERLAY_TEXT_Y_OFFSET_CURSOR_NITS = int2(    OVERLAY_TEXT_Y_OFFSETS_X_OFFSET, OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET);
+static const int2 COORDS_OVERLAY_TEXT_Y_OFFSET_CSPS        = int2(1 + OVERLAY_TEXT_Y_OFFSETS_X_OFFSET, OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET);
+static const int2 COORDS_OVERLAY_TEXT_Y_OFFSET_CURSOR_CSP  = int2(2 + OVERLAY_TEXT_Y_OFFSETS_X_OFFSET, OVERLAY_TEXT_Y_OFFSETS_Y_OFFSET);
+
+
+// (1) update Nits values and CSP percentages for the overlay
+#define UPDATE_OVERLAY_PERCENTAGES_X_OFFSET 53
+#define UPDATE_OVERLAY_PERCENTAGES_Y_OFFSET 12
+static const int2 COORDS_UPDATE_OVERLAY_PERCENTAGES = int2(UPDATE_OVERLAY_PERCENTAGES_X_OFFSET, UPDATE_OVERLAY_PERCENTAGES_Y_OFFSET);
+
+
+// (3) luminance waveform variables
+#define LUMINANCE_WAVEFORM_VARIABLES_X_OFFSET 54
+#define LUMINANCE_WAVEFORM_VARIABLES_Y_OFFSET 12
+static const int2 COORDS_LUMINANCE_WAVEFORM_LAST_SIZE_X       = int2(    LUMINANCE_WAVEFORM_VARIABLES_X_OFFSET, LUMINANCE_WAVEFORM_VARIABLES_Y_OFFSET);
+static const int2 COORDS_LUMINANCE_WAVEFORM_LAST_SIZE_Y       = int2(1 + LUMINANCE_WAVEFORM_VARIABLES_X_OFFSET, LUMINANCE_WAVEFORM_VARIABLES_Y_OFFSET);
+static const int2 COORDS_LUMINANCE_WAVEFORM_LAST_CUTOFF_POINT = int2(2 + LUMINANCE_WAVEFORM_VARIABLES_X_OFFSET, LUMINANCE_WAVEFORM_VARIABLES_Y_OFFSET);
 
 
 #define CONSOLIDATED_TEXTURE_SIZE_WIDTH  BUFFER_WIDTH
@@ -631,9 +449,9 @@ texture2D TextureConsolidated
   pooled = true;
 >
 {
-  Width     = CONSOLIDATED_TEXTURE_SIZE_WIDTH;
-  Height    = CONSOLIDATED_TEXTURE_SIZE_HEIGHT;
-  Format    = R32F;
+  Width  = CONSOLIDATED_TEXTURE_SIZE_WIDTH;
+  Height = CONSOLIDATED_TEXTURE_SIZE_HEIGHT;
+  Format = R32F;
 };
 
 sampler2D<float> SamplerConsolidated
@@ -648,12 +466,36 @@ storage2D<float> StorageConsolidated
 
 // consolidated texture end
 
-#ifdef HDR_ANALYSIS_ENABLE
+#if defined(HDR_ANALYSIS_ENABLE)
 
-#define HEATMAP_MODE_10000 0
-#define HEATMAP_MODE_4000  1
-#define HEATMAP_MODE_2000  2
-#define HEATMAP_MODE_1000  3
+
+float3 MapBt709IntoCurrentCsp(
+  const float3 Colour,
+  const float  Brightness)
+{
+#if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
+
+  return Csp::Map::Bt709Into::Scrgb(Colour, Brightness);
+
+#elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
+
+  return Csp::Map::Bt709Into::Hdr10(Colour, Brightness);
+
+#elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
+
+  return Csp::Map::Bt709Into::Hlg(Colour, Brightness);
+
+#elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
+
+  return Csp::Map::Bt709Into::Ps5(Colour, Brightness);
+
+#else
+
+  return 0.f;
+
+#endif
+}
+
 
 static const float4x3 HeatmapSteps0 = float4x3(
   100.f, 203.f, 400.f,
@@ -667,11 +509,26 @@ static const float4x3 HeatmapSteps1 = float4x3(
   1000.f, 1500.f,  2000.f,
    600.f,  800.f,  1000.f);
 
+float HeatmapFadeIn(float Y, float CurrentStep, float NormaliseTo)
+{
+  return (Y - CurrentStep)
+       / (NormaliseTo - CurrentStep);
+}
+
+float HeatmapFadeOut(float Y, float CurrentStep, float NormaliseTo)
+{
+  return 1.f - HeatmapFadeIn(Y, CurrentStep, NormaliseTo);
+}
+
+#define HEATMAP_MODE_10000 0
+#define HEATMAP_MODE_4000  1
+#define HEATMAP_MODE_2000  2
+#define HEATMAP_MODE_1000  3
+
 float3 HeatmapRgbValues(
   float Y,
   uint  Mode,
-  float WhitePoint,
-  bool  HistogramOutput)
+  bool  WaveformOutput)
 {
   float3 output;
 
@@ -690,23 +547,21 @@ float3 HeatmapRgbValues(
   else if (Y <= HeatmapSteps0[Mode][0]) // <= 100nits
   {
     //shades of grey
-    float clamped = !HistogramOutput ? Y / HeatmapSteps0[Mode][0] * 0.25f
-                                     : 0.666f;
-    output.r = clamped;
-    output.g = clamped;
-    output.b = clamped;
+    float clamped = !WaveformOutput ? Y / HeatmapSteps0[Mode][0] * 0.25f
+                                    : 0.666f;
+    output.rgb = clamped;
   }
   else if (Y <= HeatmapSteps0[Mode][1]) // <= 203nits
   {
     //(blue+green) to green
     output.r = 0.f;
     output.g = 1.f;
-    output.b = 1.f - ((Y - HeatmapSteps0[Mode][0]) / (HeatmapSteps0[Mode][1] - HeatmapSteps0[Mode][0]));
+    output.b = HeatmapFadeOut(Y, HeatmapSteps0[Mode][0], HeatmapSteps0[Mode][1]);
   }
   else if (Y <= HeatmapSteps0[Mode][2]) // <= 400nits
   {
     //green to yellow
-    output.r = (Y - HeatmapSteps0[Mode][1]) / (HeatmapSteps0[Mode][2] - HeatmapSteps0[Mode][1]);
+    output.r = HeatmapFadeIn(Y, HeatmapSteps0[Mode][1], HeatmapSteps0[Mode][2]);
     output.g = 1.f;
     output.b = 0.f;
   }
@@ -714,7 +569,7 @@ float3 HeatmapRgbValues(
   {
     //yellow to red
     output.r = 1.f;
-    output.g = 1.f - ((Y - HeatmapSteps0[Mode][2]) / (HeatmapSteps1[Mode][0] - HeatmapSteps0[Mode][2]));
+    output.g = HeatmapFadeOut(Y, HeatmapSteps0[Mode][2], HeatmapSteps1[Mode][0]);
     output.b = 0.f;
   }
   else if (Y <= HeatmapSteps1[Mode][1]) // <= 4000nits
@@ -722,12 +577,12 @@ float3 HeatmapRgbValues(
     //red to pink
     output.r = 1.f;
     output.g = 0.f;
-    output.b = (Y - HeatmapSteps1[Mode][0]) / (HeatmapSteps1[Mode][1] - HeatmapSteps1[Mode][0]);
+    output.b = HeatmapFadeIn(Y, HeatmapSteps1[Mode][0], HeatmapSteps1[Mode][1]);
   }
   else if(Y <= HeatmapSteps1[Mode][2]) // <= 10000nits
   {
     //pink to blue
-    output.r = max(1.f - ((Y - HeatmapSteps1[Mode][1]) / (HeatmapSteps1[Mode][2] - HeatmapSteps1[Mode][1])), 0.f);
+    output.r = HeatmapFadeOut(Y, HeatmapSteps1[Mode][1], HeatmapSteps1[Mode][2]);
     output.g = 0.f;
     output.b = 1.f;
   }
@@ -738,59 +593,577 @@ float3 HeatmapRgbValues(
     output.b = 0.f;
   }
 
-  if (HistogramOutput == false)
-  {
-    output *= WhitePoint;
-
-#if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
-
-    output /= 80.f;
-
-#elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
-
-    output = Csp::Mat::Bt709To::Bt2020(output);
-    output = Csp::Trc::ToPqFromNits(output);
-
-#elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
-
-    output = Csp::Mat::Bt709To::Bt2020(output);
-    output = Csp::Trc::ToHlgFromNits(output);
-
-#elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
-
-    output /= 100.f;
-    output =  Csp::Mat::Bt709To::Bt2020(output);
-
-#endif
-
-  }
-
   return output;
 }
 
 
-void PS_ClearBrightnessHistogramTexture(
-      float4 VPos     : SV_Position,
-      float2 TexCoord : TEXCOORD0,
+// calls HeatmapRgbValues with predefined parameters
+float3 WaveformRgbValues(
+  const float Y)
+{
+  // LUMINANCE_WAVEFORM_CUTOFF_POINT values match heatmap modes 1:1
+  return HeatmapRgbValues(Y, LUMINANCE_WAVEFORM_CUTOFF_POINT, true);
+}
+
+namespace Waveform
+{
+
+  struct SWaveformData
+  {
+    int   borderSize;
+    int   frameSize;
+    int2  charDimensions;
+    int2  atlasOffset;
+    int2  waveformArea;
+    int   cutoffOffset;
+    int   tickPoints[16];
+    int   fontSpacer;
+    int2  offsetToFrame;
+    int2  textOffset;
+    int   tickXOffset;
+    int   lowerFrameStart;
+    int2  endXY;
+    int   endYminus1;
+  };
+
+  SWaveformData GetData()
+  {
+    SWaveformData waveDat;
+
+    const float2 waveformScaleFactorXY = saturate(LUMINANCE_WAVEFORM_SIZE / 100.f);
+
+    const float waveformScaleFactor = (waveformScaleFactorXY.x + waveformScaleFactorXY.y) / 2.f;
+
+    const float borderAndFrameSizeFactor = max(waveformScaleFactor, 0.75f);
+    const float fontSizeFactor           = max(waveformScaleFactor, 0.85f);
+
+    waveDat.borderSize = int(TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR * 35.f * borderAndFrameSizeFactor + 0.5f);
+    waveDat.frameSize  = int(TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR *  7.f * borderAndFrameSizeFactor + 0.5f);
+
+    const uint fontSize =
+      clamp(uint(((TEXTURE_LUMINANCE_WAVEFORM_BUFFER_FACTOR * 27.f + 5.f) / 2.f * fontSizeFactor + 0.5f)) * 2, 12, 32);
+
+    const uint charArrayEntry = 32 - fontSize;
+
+    const uint atlasEntry = charArrayEntry / 2;
+
+    waveDat.charDimensions = int2(WaveCharSize[charArrayEntry], WaveCharSize[charArrayEntry + 1]);
+
+    waveDat.atlasOffset = int2(WaveAtlasXOffset[atlasEntry], WAVE_TEXTURE_OFFSET.y);
+
+    const int maxChars = LUMINANCE_WAVEFORM_CUTOFF_POINT == 0 ? 8
+                                                              : 7;
+
+    const int textWidth  = waveDat.charDimensions.x * maxChars;
+    const int tickSpacer = int(float(waveDat.charDimensions.x) / 2.f + 0.5f);
+
+    waveDat.fontSpacer = int(float(waveDat.charDimensions.y) / 2.f - float(waveDat.frameSize) + 0.5f);
+
+    waveDat.offsetToFrame = int2(waveDat.borderSize + textWidth + tickSpacer + waveDat.frameSize,
+                                 waveDat.borderSize + waveDat.fontSpacer);
+
+    static const int cutoffPoints[16] = {
+      int(0),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(4000.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(2000.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(1000.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq( 400.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq( 203.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq( 100.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(  50.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(  25.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(  10.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(   5.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(   2.5f ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(   1.f  ) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(   0.25f) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(   0.05f) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorXY.y + 0.5f),
+      int(                                                                            TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT   * waveformScaleFactorXY.y + 0.5f) };
+
+
+    waveDat.waveformArea =
+      int2(TEXTURE_LUMINANCE_WAVEFORM_WIDTH * waveformScaleFactorXY.x,
+           cutoffPoints[15] - cutoffPoints[LUMINANCE_WAVEFORM_CUTOFF_POINT]);
+
+    if (LUMINANCE_WAVEFORM_CUTOFF_POINT == 0)
+    {
+      waveDat.cutoffOffset = 0;
+
+      waveDat.tickPoints = {
+        int(0),
+        int(cutoffPoints[ 1]),
+        int(cutoffPoints[ 2]),
+        int(cutoffPoints[ 3]),
+        int(cutoffPoints[ 4]),
+        int(cutoffPoints[ 5]),
+        int(cutoffPoints[ 6]),
+        int(cutoffPoints[ 7]),
+        int(cutoffPoints[ 8]),
+        int(cutoffPoints[ 9]),
+        int(cutoffPoints[10]),
+        int(cutoffPoints[11]),
+        int(cutoffPoints[12]),
+        int(cutoffPoints[13]),
+        int(cutoffPoints[14]),
+        int(cutoffPoints[15]) };
+    }
+    else if (LUMINANCE_WAVEFORM_CUTOFF_POINT == 1)
+    {
+      waveDat.cutoffOffset = cutoffPoints[1];
+
+      waveDat.tickPoints = {
+        int(-100),
+        int(0),
+        int(cutoffPoints[ 2] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 3] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 4] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 5] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 6] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 7] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 8] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 9] - waveDat.cutoffOffset),
+        int(cutoffPoints[10] - waveDat.cutoffOffset),
+        int(cutoffPoints[11] - waveDat.cutoffOffset),
+        int(cutoffPoints[12] - waveDat.cutoffOffset),
+        int(cutoffPoints[13] - waveDat.cutoffOffset),
+        int(cutoffPoints[14] - waveDat.cutoffOffset),
+        int(cutoffPoints[15] - waveDat.cutoffOffset) };
+    }
+    else if (LUMINANCE_WAVEFORM_CUTOFF_POINT == 2)
+    {
+      waveDat.cutoffOffset = cutoffPoints[2];
+
+      waveDat.tickPoints = {
+        int(-100),
+        int(-100),
+        int(0),
+        int(cutoffPoints[ 3] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 4] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 5] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 6] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 7] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 8] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 9] - waveDat.cutoffOffset),
+        int(cutoffPoints[10] - waveDat.cutoffOffset),
+        int(cutoffPoints[11] - waveDat.cutoffOffset),
+        int(cutoffPoints[12] - waveDat.cutoffOffset),
+        int(cutoffPoints[13] - waveDat.cutoffOffset),
+        int(cutoffPoints[14] - waveDat.cutoffOffset),
+        int(cutoffPoints[15] - waveDat.cutoffOffset) };
+    }
+    else //if (LUMINANCE_WAVEFORM_CUTOFF_POINT == 3)
+    {
+      waveDat.cutoffOffset = cutoffPoints[3];
+
+      waveDat.tickPoints = {
+        int(-100),
+        int(-100),
+        int(-100),
+        int(0),
+        int(cutoffPoints[ 4] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 5] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 6] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 7] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 8] - waveDat.cutoffOffset),
+        int(cutoffPoints[ 9] - waveDat.cutoffOffset),
+        int(cutoffPoints[10] - waveDat.cutoffOffset),
+        int(cutoffPoints[11] - waveDat.cutoffOffset),
+        int(cutoffPoints[12] - waveDat.cutoffOffset),
+        int(cutoffPoints[13] - waveDat.cutoffOffset),
+        int(cutoffPoints[14] - waveDat.cutoffOffset),
+        int(cutoffPoints[15] - waveDat.cutoffOffset) };
+    }
+
+    waveDat.textOffset = int2(0, int(float(waveDat.charDimensions.y) / 2.f + 0.5f));
+
+    waveDat.tickXOffset = waveDat.borderSize
+                        + textWidth
+                        + tickSpacer;
+
+    waveDat.lowerFrameStart = waveDat.frameSize
+                            + waveDat.waveformArea.y;
+
+    waveDat.endXY = waveDat.frameSize * 2
+                  + waveDat.waveformArea;
+
+    waveDat.endYminus1 = waveDat.endXY.y - 1;
+
+    return waveDat;
+  }
+
+  float2 GetActiveArea()
+  {
+    SWaveformData waveDat = GetData();
+
+    return waveDat.offsetToFrame
+         + waveDat.frameSize
+         + waveDat.waveformArea
+         + waveDat.frameSize
+         + int2(0, waveDat.fontSpacer)
+         + waveDat.borderSize;
+  }
+
+  int2 GetNitsOffset(
+    const int ActiveBorderSize,
+    const int ActiveFrameSize,
+    const int ActiveFontSpacer,
+    const int YOffset)
+  {
+    return int2(ActiveBorderSize,
+                ActiveBorderSize + ActiveFontSpacer + ActiveFrameSize + YOffset);
+  } //GetNitsOffset
+
+  void DrawCharToScale(
+    const int  Char,
+    const int2 CharDim,
+    const int2 AtlasOffset,
+    const int2 Pos,
+    const int  CharCount)
+  {
+    const int2 charOffset = int2(AtlasOffset.x,
+                                 AtlasOffset.y + (Char * CharDim.y));
+
+    const int2 currentPos = Pos + int2(CharCount * CharDim.x, 0);
+
+    for (int x = 0; x < CharDim.x; x++)
+    {
+      for (int y = 0; y < CharDim.y; y++)
+      {
+        int2 currentOffset = int2(x, y);
+        int2 currentDrawOffset = currentPos + currentOffset;
+
+        float4 currentPixel = tex2Dfetch(StorageFontAtlasConsolidated, charOffset + currentOffset);
+        currentPixel.rgb = pow(currentPixel.rgb, 2.2f);
+
+        tex2Dstore(StorageLuminanceWaveformScale, currentDrawOffset, currentPixel);
+      }
+    }
+    return;
+  } //DrawCharToScale
+
+}
+
+void CS_RenderLuminanceWaveformScale()
+{
+  if (tex2Dfetch(StorageConsolidated, COORDS_LUMINANCE_WAVEFORM_LAST_SIZE_X).x       != LUMINANCE_WAVEFORM_SIZE.x
+   || tex2Dfetch(StorageConsolidated, COORDS_LUMINANCE_WAVEFORM_LAST_SIZE_Y).x       != LUMINANCE_WAVEFORM_SIZE.y
+   || tex2Dfetch(StorageConsolidated, COORDS_LUMINANCE_WAVEFORM_LAST_CUTOFF_POINT).x != LUMINANCE_WAVEFORM_CUTOFF_POINT)
+  {
+    //make background all black
+    for (int x = 0; x < TEXTURE_LUMINANCE_WAVEFORM_SCALE_WIDTH; x++)
+    {
+      for (int y = 0; y < TEXTURE_LUMINANCE_WAVEFORM_SCALE_HEIGHT; y++)
+      {
+        tex2Dstore(StorageLuminanceWaveformScale, int2(x, y), float4(0.f, 0.f, 0.f, 1.f));
+      }
+    }
+
+    Waveform::SWaveformData waveDat = Waveform::GetData();
+
+
+    const int2 nits10000_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 0]);
+    const int2 nits_4000_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 1]);
+    const int2 nits_2000_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 2]);
+    const int2 nits_1000_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 3]);
+    const int2 nits__400_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 4]);
+    const int2 nits__203_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 5]);
+    const int2 nits__100_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 6]);
+    const int2 nits___50_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 7]);
+    const int2 nits___25_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 8]);
+    const int2 nits___10_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[ 9]);
+    const int2 nits____5_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[10]);
+    const int2 nits____2_50Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[11]);
+    const int2 nits____1_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[12]);
+    const int2 nits____0_25Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[13]);
+    const int2 nits____0_05Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[14]);
+    const int2 nits____0_00Offset = Waveform::GetNitsOffset(waveDat.borderSize, waveDat.frameSize, waveDat.fontSpacer, waveDat.tickPoints[15]);
+
+
+    const int2 text10000_00Offset = nits10000_00Offset - waveDat.textOffset;
+    const int2 text_4000_00Offset = nits_4000_00Offset - waveDat.textOffset;
+    const int2 text_2000_00Offset = nits_2000_00Offset - waveDat.textOffset;
+    const int2 text_1000_00Offset = nits_1000_00Offset - waveDat.textOffset;
+    const int2 text__400_00Offset = nits__400_00Offset - waveDat.textOffset;
+    const int2 text__203_00Offset = nits__203_00Offset - waveDat.textOffset;
+    const int2 text__100_00Offset = nits__100_00Offset - waveDat.textOffset;
+    const int2 text___50_00Offset = nits___50_00Offset - waveDat.textOffset;
+    const int2 text___25_00Offset = nits___25_00Offset - waveDat.textOffset;
+    const int2 text___10_00Offset = nits___10_00Offset - waveDat.textOffset;
+    const int2 text____5_00Offset = nits____5_00Offset - waveDat.textOffset;
+    const int2 text____2_50Offset = nits____2_50Offset - waveDat.textOffset;
+    const int2 text____1_00Offset = nits____1_00Offset - waveDat.textOffset;
+    const int2 text____0_25Offset = nits____0_25Offset - waveDat.textOffset;
+    const int2 text____0_05Offset = nits____0_05Offset - waveDat.textOffset;
+    const int2 text____0_00Offset = nits____0_00Offset - waveDat.textOffset;
+
+    int charOffsets[8];
+
+    if (LUMINANCE_WAVEFORM_CUTOFF_POINT == 0)
+    {
+      charOffsets = {
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7 };
+    }
+    else //if (LUMINANCE_WAVEFORM_CUTOFF_POINT > 0)
+    {
+      charOffsets = {
+        0,
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6 };
+    }
+
+    if (LUMINANCE_WAVEFORM_CUTOFF_POINT == 0)
+    {
+      Waveform::DrawCharToScale(  _1_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[0]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[1]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[2]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[3]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[4]);
+      Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[5]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[6]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text10000_00Offset, charOffsets[7]);
+    }
+
+    if (LUMINANCE_WAVEFORM_CUTOFF_POINT <= 1)
+    {
+      Waveform::DrawCharToScale(  _4_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[1]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[2]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[3]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[4]);
+      Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[5]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[6]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_4000_00Offset, charOffsets[7]);
+    }
+
+    if (LUMINANCE_WAVEFORM_CUTOFF_POINT <= 2)
+    {
+      Waveform::DrawCharToScale(  _2_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[1]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[2]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[3]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[4]);
+      Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[5]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[6]);
+      Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_2000_00Offset, charOffsets[7]);
+    }
+
+    Waveform::DrawCharToScale(  _1_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[1]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[2]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text_1000_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _4_w, waveDat.charDimensions, waveDat.atlasOffset, text__400_00Offset, charOffsets[2]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__400_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__400_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text__400_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__400_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__400_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _2_w, waveDat.charDimensions, waveDat.atlasOffset, text__203_00Offset, charOffsets[2]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__203_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _3_w, waveDat.charDimensions, waveDat.atlasOffset, text__203_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text__203_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__203_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__203_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _1_w, waveDat.charDimensions, waveDat.atlasOffset, text__100_00Offset, charOffsets[2]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__100_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__100_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text__100_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__100_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text__100_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _5_w, waveDat.charDimensions, waveDat.atlasOffset, text___50_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___50_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text___50_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___50_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___50_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _2_w, waveDat.charDimensions, waveDat.atlasOffset, text___25_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _5_w, waveDat.charDimensions, waveDat.atlasOffset, text___25_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text___25_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___25_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___25_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _1_w, waveDat.charDimensions, waveDat.atlasOffset, text___10_00Offset, charOffsets[3]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___10_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text___10_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___10_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text___10_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _5_w, waveDat.charDimensions, waveDat.atlasOffset, text____5_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text____5_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____5_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____5_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _2_w, waveDat.charDimensions, waveDat.atlasOffset, text____2_50Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text____2_50Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _5_w, waveDat.charDimensions, waveDat.atlasOffset, text____2_50Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____2_50Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _1_w, waveDat.charDimensions, waveDat.atlasOffset, text____1_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text____1_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____1_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____1_00Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_25Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_25Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _2_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_25Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _5_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_25Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_05Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_05Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_05Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _5_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_05Offset, charOffsets[7]);
+
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_00Offset, charOffsets[4]);
+    Waveform::DrawCharToScale(_dot_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_00Offset, charOffsets[5]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_00Offset, charOffsets[6]);
+    Waveform::DrawCharToScale(  _0_w, waveDat.charDimensions, waveDat.atlasOffset, text____0_00Offset, charOffsets[7]);
+
+    // draw the frame, ticks and horizontal lines
+    for (int y = 0; y < waveDat.endXY.y; y++)
+    {
+      int2 curPos = waveDat.offsetToFrame + int2(0, y);
+
+      float curGrey = lerp(0.5f, 0.4f, (float(y + waveDat.cutoffOffset) / float(waveDat.endYminus1 + waveDat.cutoffOffset)));
+      curGrey = pow(curGrey, 2.2f);
+
+      float4 curColour = float4(curGrey.xxx, 1.f);
+
+      // draw top and bottom part of the frame
+      if (y <  waveDat.frameSize
+       || y >= waveDat.lowerFrameStart)
+      {
+        for (int x = 0; x < waveDat.endXY.x; x++)
+        {
+          int2 curXPos = int2(x + curPos.x, curPos.y);
+          tex2Dstore(StorageLuminanceWaveformScale, curXPos, curColour);
+        }
+      }
+      // draw left and right part of the frame
+      else
+      {
+        for (int x = 0; x < waveDat.frameSize; x++)
+        {
+          int2 curLeftPos  = int2(x + curPos.x, curPos.y);
+          int2 curRightPos = int2(curLeftPos.x + waveDat.waveformArea.x + waveDat.frameSize, curLeftPos.y);
+          tex2Dstore(StorageLuminanceWaveformScale, curLeftPos,  curColour);
+          tex2Dstore(StorageLuminanceWaveformScale, curRightPos, curColour);
+        }
+      }
+
+      // draw top tick and bottom tick
+#ifdef IS_QHD_OR_HIGHER_RES
+      if ((LUMINANCE_WAVEFORM_CUTOFF_POINT == 0 && ((nits10000_00Offset.y - 1) == curPos.y || nits10000_00Offset.y == curPos.y || (nits10000_00Offset.y + 1) == curPos.y))
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT == 1 && ((nits_4000_00Offset.y - 1) == curPos.y || nits_4000_00Offset.y == curPos.y || (nits_4000_00Offset.y + 1) == curPos.y))
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT == 2 && ((nits_2000_00Offset.y - 1) == curPos.y || nits_2000_00Offset.y == curPos.y || (nits_2000_00Offset.y + 1) == curPos.y))
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT == 3 && ((nits_1000_00Offset.y - 1) == curPos.y || nits_1000_00Offset.y == curPos.y || (nits_1000_00Offset.y + 1) == curPos.y))
+       || (nits____0_00Offset.y - 1) == curPos.y || nits____0_00Offset.y == curPos.y || (nits____0_00Offset.y + 1) == curPos.y)
+#else
+      if ((LUMINANCE_WAVEFORM_CUTOFF_POINT == 0 && nits10000_00Offset.y == curPos.y)
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT == 1 && nits_4000_00Offset.y == curPos.y)
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT == 2 && nits_2000_00Offset.y == curPos.y)
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT == 3 && nits_1000_00Offset.y == curPos.y)
+       || nits____0_00Offset.y == curPos.y)
+#endif
+      {
+        for (int x = waveDat.tickXOffset; x < (waveDat.tickXOffset + waveDat.frameSize); x++)
+        {
+          int2 curTickPos = int2(x, curPos.y);
+          tex2Dstore(StorageLuminanceWaveformScale, curTickPos, curColour);
+        }
+      }
+
+      // draw ticks + draw horizontal lines
+#ifdef IS_QHD_OR_HIGHER_RES
+      if ((LUMINANCE_WAVEFORM_CUTOFF_POINT < 1 && ((nits_4000_00Offset.y - 1) == curPos.y || nits_4000_00Offset.y == curPos.y || (nits_4000_00Offset.y + 1) == curPos.y))
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT < 2 && ((nits_2000_00Offset.y - 1) == curPos.y || nits_2000_00Offset.y == curPos.y || (nits_2000_00Offset.y + 1) == curPos.y))
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT < 3 && ((nits_1000_00Offset.y - 1) == curPos.y || nits_1000_00Offset.y == curPos.y || (nits_1000_00Offset.y + 1) == curPos.y))
+       || (nits__400_00Offset.y - 1) == curPos.y || nits__400_00Offset.y == curPos.y || (nits__400_00Offset.y + 1) == curPos.y
+       || (nits__203_00Offset.y - 1) == curPos.y || nits__203_00Offset.y == curPos.y || (nits__203_00Offset.y + 1) == curPos.y
+       || (nits__100_00Offset.y - 1) == curPos.y || nits__100_00Offset.y == curPos.y || (nits__100_00Offset.y + 1) == curPos.y
+       || (nits___50_00Offset.y - 1) == curPos.y || nits___50_00Offset.y == curPos.y || (nits___50_00Offset.y + 1) == curPos.y
+       || (nits___25_00Offset.y - 1) == curPos.y || nits___25_00Offset.y == curPos.y || (nits___25_00Offset.y + 1) == curPos.y
+       || (nits___10_00Offset.y - 1) == curPos.y || nits___10_00Offset.y == curPos.y || (nits___10_00Offset.y + 1) == curPos.y
+       || (nits____5_00Offset.y - 1) == curPos.y || nits____5_00Offset.y == curPos.y || (nits____5_00Offset.y + 1) == curPos.y
+       || (nits____2_50Offset.y - 1) == curPos.y || nits____2_50Offset.y == curPos.y || (nits____2_50Offset.y + 1) == curPos.y
+       || (nits____1_00Offset.y - 1) == curPos.y || nits____1_00Offset.y == curPos.y || (nits____1_00Offset.y + 1) == curPos.y
+       || (nits____0_25Offset.y - 1) == curPos.y || nits____0_25Offset.y == curPos.y || (nits____0_25Offset.y + 1) == curPos.y
+       || (nits____0_05Offset.y - 1) == curPos.y || nits____0_05Offset.y == curPos.y || (nits____0_05Offset.y + 1) == curPos.y)
+#else
+      if ((LUMINANCE_WAVEFORM_CUTOFF_POINT < 1 && nits_4000_00Offset.y == curPos.y)
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT < 2 && nits_2000_00Offset.y == curPos.y)
+       || (LUMINANCE_WAVEFORM_CUTOFF_POINT < 3 && nits_1000_00Offset.y == curPos.y)
+       || nits__400_00Offset.y == curPos.y
+       || nits__203_00Offset.y == curPos.y
+       || nits__100_00Offset.y == curPos.y
+       || nits___50_00Offset.y == curPos.y
+       || nits___25_00Offset.y == curPos.y
+       || nits___10_00Offset.y == curPos.y
+       || nits____5_00Offset.y == curPos.y
+       || nits____2_50Offset.y == curPos.y
+       || nits____1_00Offset.y == curPos.y
+       || nits____0_25Offset.y == curPos.y
+       || nits____0_05Offset.y == curPos.y)
+#endif
+      {
+        for (int x = waveDat.tickXOffset; x < (waveDat.tickXOffset + waveDat.endXY.x); x++)
+        {
+          int2 curTickPos = int2(x, curPos.y);
+          tex2Dstore(StorageLuminanceWaveformScale, curTickPos, curColour);
+        }
+      }
+    }
+
+    tex2Dstore(StorageConsolidated, COORDS_LUMINANCE_WAVEFORM_LAST_SIZE_X,       LUMINANCE_WAVEFORM_SIZE.x);
+    tex2Dstore(StorageConsolidated, COORDS_LUMINANCE_WAVEFORM_LAST_SIZE_Y,       LUMINANCE_WAVEFORM_SIZE.y);
+    tex2Dstore(StorageConsolidated, COORDS_LUMINANCE_WAVEFORM_LAST_CUTOFF_POINT, LUMINANCE_WAVEFORM_CUTOFF_POINT);
+  }
+  return;
+}
+
+void PS_ClearLuminanceWaveformTexture(
+  in  float4 VPos     : SV_Position,
+  in  float2 TexCoord : TEXCOORD0,
   out float4 Out      : SV_TARGET)
 {
+  Out = 0.f;
   discard;
 }
 
-void CS_RenderBrightnessHistogram(uint3 ID : SV_DispatchThreadID)
+void CS_RenderLuminanceWaveform(uint3 ID : SV_DispatchThreadID)
 {
-  if (SHOW_BRIGHTNESS_HISTOGRAM)
+  if (SHOW_LUMINANCE_WAVEFORM)
   {
     for (uint y = 0; y < BUFFER_HEIGHT; y++)
     {
-      float curPixelCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).x;
+      const float curPixelNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).x;
 
-      int yCoord =
-        round(TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT - (Csp::Trc::ToPqFromNits(curPixelCLL) * TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT));
+      if (curPixelNits > 0.f)
+      {
+        const int2 coord = float2(float(ID.x)
+                                / TEXTURE_LUMINANCE_WAVEFORM_BUFFER_WIDTH_FACTOR,
+                                  TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT
+                                - (Csp::Trc::NitsTo::Pq(curPixelNits) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) + 0.5f;
 
-      tex2Dstore(StorageBrightnessHistogram,
-                 int2(round(ID.x / TEXTURE_BRIGHTNESS_HISTOGRAM_BUFFER_WIDTH_FACTOR), yCoord),
-                 float4(HeatmapRgbValues(curPixelCLL, HEATMAP_MODE_10000, 1.f, true), 1.f));
+        tex2Dstore(StorageLuminanceWaveform,
+                   coord,
+                   float4(WaveformRgbValues(curPixelNits), 1.f));
+      }
     }
   }
 }
@@ -798,11 +1171,12 @@ void CS_RenderBrightnessHistogram(uint3 ID : SV_DispatchThreadID)
 // Vertex shader generating a triangle covering the entire screen.
 // Calculate values only "once" (3 times because it's 3 vertices)
 // for the pixel shader.
-void VS_PrepareRenderBrightnessHistogramToScale(
-  in                  uint   Id             : SV_VertexID,
-  out                 float4 VPos           : SV_Position,
-  out                 float2 TexCoord       : TEXCOORD0,
-  out nointerpolation int2   CllWhiteLinesY : CllWhiteLinesY)
+void VS_PrepareRenderLuminanceWaveformToScale(
+  in                  uint   Id       : SV_VertexID,
+  out                 float4 VPos     : SV_Position,
+  out                 float2 TexCoord : TEXCOORD0,
+  out nointerpolation int4   WaveDat0 : WaveDat0,
+  out nointerpolation int3   WaveDat1 : WaveDat1)
 {
   TexCoord.x = (Id == 2) ? 2.f
                          : 0.f;
@@ -810,73 +1184,103 @@ void VS_PrepareRenderBrightnessHistogramToScale(
                          : 0.f;
   VPos = float4(TexCoord * float2(2.f, -2.f) + float2(-1.f, 1.f), 0.f, 1.f);
 
-#define minCllWhiteLineY CllWhiteLinesY.x
-#define maxCllWhiteLineY CllWhiteLinesY.y
+#define WaveformActiveArea   WaveDat0.xy
+#define OffsetToWaveformArea WaveDat0.zw
+#define WaveformCutoffOffset WaveDat1.x
 
-  if (SHOW_BRIGHTNESS_HISTOGRAM)
+#define MinNitsLineY WaveDat1.y
+#define MaxNitsLineY WaveDat1.z
+
+  WaveDat0    = 0;
+  WaveDat1.x  = 0;
+  WaveDat1.yz = -100;
+
+  if (SHOW_LUMINANCE_WAVEFORM)
   {
-    if (BRIGHTNESS_HISTOGRAM_SHOW_MINCLL_LINE)
+    Waveform::SWaveformData waveDat = Waveform::GetData();
+
+    WaveDat0 = int4(waveDat.waveformArea, waveDat.offsetToFrame
+                                         + waveDat.frameSize);
+
+    WaveformCutoffOffset = waveDat.cutoffOffset;
+
+    const float waveformScaleFactorY = saturate(LUMINANCE_WAVEFORM_SIZE.y / 100.f);
+
+    if (LUMINANCE_WAVEFORM_SHOW_MIN_NITS_LINE)
     {
-      float minCll = tex2Dfetch(SamplerConsolidated, COORDS_MINCLL_VALUE);
+      const float minNits = tex2Dfetch(SamplerConsolidated, COORDS_MIN_NITS_VALUE);
 
-      int yPos =
-        min(
-          int(round(TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT - (Csp::Trc::ToPqFromNits(minCll) * TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT)))
-        , 1023);
-
-      minCllWhiteLineY = minCll > 0.f ? yPos
-                                      : -1;
+      if (minNits > 0.f
+       && minNits <= 10000.f)
+      {
+        MinNitsLineY =
+          int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(minNits) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorY + 0.5f)
+        - waveDat.cutoffOffset;
+      }
     }
 
-    if (BRIGHTNESS_HISTOGRAM_SHOW_MAXCLL_LINE)
+    if (LUMINANCE_WAVEFORM_SHOW_MAX_NITS_LINE)
     {
-      float maxCll = tex2Dfetch(SamplerConsolidated, COORDS_MAXCLL_VALUE);
+      const float maxNits = tex2Dfetch(SamplerConsolidated, COORDS_MAX_NITS_VALUE);
 
-      int yPos =
-        max(
-          int(round(TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT - (Csp::Trc::ToPqFromNits(maxCll) * TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT)))
-        , 0);
-
-      maxCllWhiteLineY = maxCll < 10000.f ? yPos
-                                          : -1;
+      if (maxNits >  0.f
+       && maxNits <= 10000.f)
+      {
+        MaxNitsLineY =
+          int((TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT - (Csp::Trc::NitsTo::Pq(maxNits) * TEXTURE_LUMINANCE_WAVEFORM_USED_HEIGHT)) * waveformScaleFactorY + 0.5f)
+        - waveDat.cutoffOffset;
+      }
     }
   }
 }
 
-void PS_RenderBrightnessHistogramToScale(
-  in                  float4 VPos           : SV_Position,
-  in                  float2 TexCoord       : TEXCOORD0,
-  in  nointerpolation int2   CllWhiteLinesY : CllWhiteLinesY,
-  out                 float4 Out            : SV_TARGET0)
+void PS_RenderLuminanceWaveformToScale(
+  in                  float4 VPos     : SV_Position,
+  in                  float2 TexCoord : TEXCOORD0,
+  in  nointerpolation int4   WaveDat0 : WaveDat0,
+  in  nointerpolation int3   WaveDat1 : WaveDat1,
+  out                 float4 Out      : SV_TARGET0)
 {
-  if (SHOW_BRIGHTNESS_HISTOGRAM)
-  {
-    int2 histogramCoords = int2(round(TexCoord.x * TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_WIDTH  - 0.5f - 250.f),
-                                round(TexCoord.y * TEXTURE_BRIGHTNESS_HISTOGRAM_SCALE_HEIGHT - 0.5f -  64.f));
+  Out = 0.f;
 
-    if (histogramCoords.x >= 0 && histogramCoords.x < TEXTURE_BRIGHTNESS_HISTOGRAM_WIDTH
-     && histogramCoords.y >= 0 && histogramCoords.y < TEXTURE_BRIGHTNESS_HISTOGRAM_HEIGHT)
+  if (SHOW_LUMINANCE_WAVEFORM)
+  {
+    int2 waveformCoords = int2(VPos.xy) - OffsetToWaveformArea;
+
+    if (all(waveformCoords >= 0)
+     && all(waveformCoords < WaveformActiveArea))
     {
-      if (BRIGHTNESS_HISTOGRAM_SHOW_MINCLL_LINE && (histogramCoords.y == minCllWhiteLineY
-                                                 || histogramCoords.y == minCllWhiteLineY - 1))
+#ifdef IS_QHD_OR_HIGHER_RES
+      if (waveformCoords.y == MinNitsLineY
+       || waveformCoords.y == MinNitsLineY - 1)
+#else
+      if (waveformCoords.y == MinNitsLineY)
+#endif
       {
         Out = float4(1.f, 1.f, 1.f, 1.f);
         return;
       }
-      if (BRIGHTNESS_HISTOGRAM_SHOW_MAXCLL_LINE && (histogramCoords.y == maxCllWhiteLineY
-                                                 || histogramCoords.y == maxCllWhiteLineY + 1
-                                                 || histogramCoords.y == maxCllWhiteLineY + 2))
+#ifdef IS_QHD_OR_HIGHER_RES
+      if (waveformCoords.y == MaxNitsLineY
+       || waveformCoords.y == MaxNitsLineY + 1)
+#else
+      if (waveformCoords.y == MaxNitsLineY)
+#endif
       {
         Out = float4(1.f, 1.f, 0.f, 1.f);
         return;
       }
-      Out = float4(tex2D(SamplerBrightnessHistogramScale, TexCoord).rgb
-                 + tex2Dfetch(SamplerBrightnessHistogram, histogramCoords).rgb
-            , 1.f);
+      float2 waveformSamplerCoords = (int2(waveformCoords.x, (waveformCoords.y >= MaxNitsLineY) * waveformCoords.y) + int2(0, WaveformCutoffOffset) + 0.5f)
+                                    * (clamp(100.f / LUMINANCE_WAVEFORM_SIZE, 1.f, 2.f))
+                                    / float2(TEXTURE_LUMINANCE_WAVEFORM_WIDTH, TEXTURE_LUMINANCE_WAVEFORM_HEIGHT);
+
+      Out = float4(tex2D(SamplerLuminanceWaveformScale, TexCoord).rgb
+                 + tex2D(SamplerLuminanceWaveform,      waveformSamplerCoords).rgb,
+                   1.f);
       return;
     }
     //else
-    Out = tex2D(SamplerBrightnessHistogramScale, TexCoord);
+    Out = tex2D(SamplerLuminanceWaveformScale, TexCoord);
     return;
   }
   discard;
@@ -884,19 +1288,22 @@ void PS_RenderBrightnessHistogramToScale(
 
 #endif //HDR_ANALYSIS_ENABLE
 
-void PS_CalcCllPerPixel(
+void PS_CalcNitsPerPixel(
               float4 VPos     : SV_Position,
               float2 TexCoord : TEXCOORD,
-  out precise float  CurCll   : SV_TARGET)
+  out precise float  CurNits   : SV_TARGET)
 {
-#ifdef HDR_ANALYSIS_ENABLE
-  if (SHOW_CLL_VALUES
-   || SHOW_CLL_FROM_CURSOR
+  CurNits = 0.f;
+
+#if defined(HDR_ANALYSIS_ENABLE)
+  if (SHOW_NITS_VALUES
+   || SHOW_NITS_FROM_CURSOR
    || SHOW_HEATMAP
-   || SHOW_BRIGHTNESS_HISTOGRAM
+   || SHOW_LUMINANCE_WAVEFORM
    || HIGHLIGHT_NIT_RANGE
    || DRAW_ABOVE_NITS_AS_BLACK
-   || DRAW_BELOW_NITS_AS_BLACK)
+   || DRAW_BELOW_NITS_AS_BLACK
+   || SHOW_CSP_MAP)
   {
 #endif //HDR_ANALYSIS_ENABLE
 
@@ -904,50 +1311,51 @@ void PS_CalcCllPerPixel(
 
 #if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
 
-    precise float curPixelCll = dot(Csp::Mat::Bt709ToXYZ[1], pixel) * 80.f;
+    precise float curPixelNits = dot(Csp::Mat::Bt709ToXYZ[1], pixel) * 80.f;
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
 
-    precise float curPixelCll = dot(Csp::Mat::Bt2020ToXYZ[1], Csp::Trc::FromPq(pixel)) * 10000.f;
+    precise float curPixelNits = dot(Csp::Mat::Bt2020ToXYZ[1], Csp::Trc::PqTo::Nits(pixel));
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
 
-    precise float curPixelCll = dot(Csp::Mat::Bt2020ToXYZ[1], Csp::Trc::FromHlg(pixel)) * 1000.f;
+    precise float curPixelNits = dot(Csp::Mat::Bt2020ToXYZ[1], Csp::Trc::HlgTo::Nits(pixel));
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
 
-    precise float curPixelCll = dot(Csp::Mat::Bt2020ToXYZ[1], pixel) * 100.f;
+    precise float curPixelNits = dot(Csp::Mat::Bt2020ToXYZ[1], pixel) * 100.f;
 
 #else
 
-    float curPixelCll = 0.f;
+    float curPixelNits = 0.f;
 
 #endif //ACTUAL_COLOUR_SPACE ==
 
-    CurCll = curPixelCll >= 0.f ? curPixelCll
-                                : 0.f;
-
+    if (curPixelNits >= 0.f)
+    {
+      CurNits = curPixelNits;
+    }
     return;
 
-#ifdef HDR_ANALYSIS_ENABLE
+#if defined(HDR_ANALYSIS_ENABLE)
   }
   discard;
 #endif //HDR_ANALYSIS_ENABLE
 }
 
-#ifdef HDR_ANALYSIS_ENABLE
+#if defined(HDR_ANALYSIS_ENABLE)
 
-#define COORDS_INTERMEDIATE_MAXCLL(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 0 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-//#define COORDS_INTERMEDIATE_AVGCLL(X) \
-//  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 1 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-//#define COORDS_INTERMEDIATE_MINCLL(X) \
-//  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 2 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_MAX_NITS(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 0 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+//#define COORDS_INTERMEDIATE_AVG_NITS(X) \
+//  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 1 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+//#define COORDS_INTERMEDIATE_MIN_NITS(X) \
+//  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 2 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
 //
 // per column first
 //void CS_GetMaxAvgMinCll0(uint3 ID : SV_DispatchThreadID)
 //{
-//  if (SHOW_CLL_VALUES)
+//  if (SHOW_NITS_VALUES)
 //  {
 //#ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
 //
@@ -956,28 +1364,28 @@ void PS_CalcCllPerPixel(
 //
 //#endif
 //
-//    float maxCLL = 0.f;
-//    float avgCLL = 0.f;
-//    float minCLL = 65504.f;
+//    float maxNits = 0.f;
+//    float avgNits = 0.f;
+//    float minNits = 65504.f;
 //
 //    for (uint y = 0; y < BUFFER_HEIGHT; y++)
 //    {
-//      float curCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+//      float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 //
-//      if (curCLL > maxCLL)
-//        maxCLL = curCLL;
+//      if (curNits > maxNits)
+//        maxNits = curNits;
 //
-//      avgCLL += curCLL;
+//      avgNits += curNits;
 //
-//      if (curCLL < minCLL)
-//        minCLL = curCLL;
+//      if (curNits < minNits)
+//        minNits = curNits;
 //    }
 //
-//    avgCLL /= BUFFER_HEIGHT;
+//    avgNits /= BUFFER_HEIGHT;
 //
-//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL(ID.x), maxCLL);
-//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL(ID.x), avgCLL);
-//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL(ID.x), minCLL);
+//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS(ID.x), maxNits);
+//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS(ID.x), avgNits);
+//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS(ID.x), minNits);
 //
 //#ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
 //
@@ -989,34 +1397,34 @@ void PS_CalcCllPerPixel(
 //
 //void CS_GetMaxAvgMinCll1(uint3 ID : SV_DispatchThreadID)
 //{
-//  if (SHOW_CLL_VALUES)
+//  if (SHOW_NITS_VALUES)
 //  {
-//  float maxCLL = 0.f;
-//  float avgCLL = 0.f;
-//  float minCLL = 65504.f;
+//  float maxNits = 0.f;
+//  float avgNits = 0.f;
+//  float minNits = 65504.f;
 //
 //  for (uint x = 0; x < BUFFER_WIDTH; x++)
 //  {
-//    float curMaxCLL = tex2Dfetch(StorageConsolidated, int2(COORDS_INTERMEDIATE_MAXCLL(x)));
-//    float curAvgCLL = tex2Dfetch(StorageConsolidated, int2(COORDS_INTERMEDIATE_AVGCLL(x)));
-//    float curMinCLL = tex2Dfetch(StorageConsolidated, int2(COORDS_INTERMEDIATE_MINCLL(x)));
+//    float curMaxNits = tex2Dfetch(StorageConsolidated, int2(COORDS_INTERMEDIATE_MAX_NITS(x)));
+//    float curAvgNits = tex2Dfetch(StorageConsolidated, int2(COORDS_INTERMEDIATE_AVG_NITS(x)));
+//    float curMinNits = tex2Dfetch(StorageConsolidated, int2(COORDS_INTERMEDIATE_MIN_NITS(x)));
 //
-//    if (curMaxCLL > maxCLL)
-//      maxCLL = curMaxCLL;
+//    if (curMaxNits > maxNits)
+//      maxNits = curMaxNits;
 //
-//    avgCLL += curAvgCLL;
+//    avgNits += curAvgNits;
 //
-//    if (curMinCLL < minCLL)
-//      minCLL = curMinCLL;
+//    if (curMinNits < minNits)
+//      minNits = curMinNits;
 //  }
 //
-//  avgCLL /= BUFFER_WIDTH;
+//  avgNits /= BUFFER_WIDTH;
 //
 //  barrier();
 //
-//  tex2Dstore(StorageConsolidated, COORDS_MAXCLL_VALUE, maxCLL);
-//  tex2Dstore(StorageConsolidated, COORDS_AVGCLL_VALUE, avgCLL);
-//  tex2Dstore(StorageConsolidated, COORDS_MINCLL_VALUE, minCLL);
+//  tex2Dstore(StorageConsolidated, COORDS_MAX_NITS_VALUE, maxNits);
+//  tex2Dstore(StorageConsolidated, COORDS_AVG_NITS_VALUE, avgNits);
+//  tex2Dstore(StorageConsolidated, COORDS_MIN_NITS_VALUE, minNits);
 //  }
 //}
 //
@@ -1031,17 +1439,17 @@ void PS_CalcCllPerPixel(
 //
 //#endif
 //
-//    float maxCLL = 0.f;
+//    float maxNits = 0.f;
 //
 //    for (uint y = 0; y < BUFFER_HEIGHT; y++)
 //    {
-//      float curCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+//      float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 //
-//      if (curCLL > maxCLL)
-//        maxCLL = curCLL;
+//      if (curNits > maxNits)
+//        maxNits = curNits;
 //    }
 //
-//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL(ID.x), maxCLL);
+//    tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS(ID.x), maxNits);
 //
 //#ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
 //
@@ -1052,45 +1460,47 @@ void PS_CalcCllPerPixel(
 //
 //void CS_GetMaxCll1(uint3 ID : SV_DispatchThreadID)
 //{
-//  float maxCLL = 0.f;
+//  float maxNits = 0.f;
 //
 //  for (uint x = 0; x < BUFFER_WIDTH; x++)
 //  {
-//    float curCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL(x));
+//    float curNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS(x));
 //
-//    if (curCLL > maxCLL)
-//      maxCLL = curCLL;
+//    if (curNits > maxNits)
+//      maxNits = curNits;
 //  }
 //
 //  barrier();
 //
-//  tex2Dstore(StorageConsolidated, COORDS_MAXCLL_VALUE, maxCLL);
+//  tex2Dstore(StorageConsolidated, COORDS_MAX_NITS_VALUE, maxNits);
 //}
 //
-//#undef COORDS_INTERMEDIATE_MAXCLL
-//#undef COORDS_INTERMEDIATE_AVGCLL
-//#undef COORDS_INTERMEDIATE_MINCLL
+//#undef COORDS_INTERMEDIATE_MAX_NITS
+//#undef COORDS_INTERMEDIATE_AVG_NITS
+//#undef COORDS_INTERMEDIATE_MIN_NITS
 
 #endif //HDR_ANALYSIS_ENABLE
 
-#define COORDS_INTERMEDIATE_MAXCLL0(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 0 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-#define COORDS_INTERMEDIATE_AVGCLL0(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 1 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-#define COORDS_INTERMEDIATE_MINCLL0(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 2 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-#define COORDS_INTERMEDIATE_MAXCLL1(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 3 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-#define COORDS_INTERMEDIATE_AVGCLL1(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 4 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
-#define COORDS_INTERMEDIATE_MINCLL1(X) \
-  int2(X + INTERMEDIATE_CLL_VALUES_X_OFFSET, 5 + INTERMEDIATE_CLL_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_MAX_NITS0(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 0 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_AVG_NITS0(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 1 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_MIN_NITS0(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 2 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_MAX_NITS1(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 3 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_AVG_NITS1(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 4 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
+#define COORDS_INTERMEDIATE_MIN_NITS1(X) \
+  int2(X + INTERMEDIATE_NITS_VALUES_X_OFFSET, 5 + INTERMEDIATE_NITS_VALUES_Y_OFFSET)
 
-#ifdef HDR_ANALYSIS_ENABLE
+#if defined(HDR_ANALYSIS_ENABLE)
 
-void CS_GetMaxAvgMinCLL0_NEW(uint3 ID : SV_DispatchThreadID)
+void CS_GetMaxAvgMinNits0_NEW(uint3 ID : SV_DispatchThreadID)
 {
-  if (SHOW_CLL_VALUES)
+  if (SHOW_NITS_VALUES
+   || (SHOW_LUMINANCE_WAVEFORM
+    && (LUMINANCE_WAVEFORM_SHOW_MIN_NITS_LINE || LUMINANCE_WAVEFORM_SHOW_MAX_NITS_LINE)))
   {
 #ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
 
@@ -1101,128 +1511,126 @@ void CS_GetMaxAvgMinCLL0_NEW(uint3 ID : SV_DispatchThreadID)
 
       if(ID.y == 0)
       {
-        float maxCLL = 0.f;
-        float avgCLL = 0.f;
-        float minCLL = 65504.f;
+        float maxNits = 0.f;
+        float avgNits = 0.f;
+        float minNits = FP32_MAX;
 
         for (uint y = 0; y < HEIGHT0; y++)
         {
-          float curCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+          const float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 
-          if (curCLL > maxCLL)
-            maxCLL = curCLL;
+          maxNits = max(maxNits, curNits);
 
-          avgCLL += curCLL;
+          avgNits += curNits;
 
-          if (curCLL < minCLL)
-            minCLL = curCLL;
+          minNits = min(minNits, curNits);
         }
 
-        avgCLL /= HEIGHT0;
+        avgNits /= HEIGHT0;
 
-        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL0(ID.x), maxCLL);
-        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL0(ID.x), avgCLL);
-        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL0(ID.x), minCLL);
+        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS0(ID.x), maxNits);
+        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS0(ID.x), avgNits);
+        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS0(ID.x), minNits);
+
+        barrier();
       }
       else
       {
-        float maxCLL = 0.f;
-        float avgCLL = 0.f;
-        float minCLL = 65504.f;
+        float maxNits = 0.f;
+        float avgNits = 0.f;
+        float minNits = FP32_MAX;
 
         for (uint y = HEIGHT0; y < BUFFER_HEIGHT; y++)
         {
-          float curCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+          const float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 
-          if (curCLL > maxCLL)
-            maxCLL = curCLL;
+          maxNits = max(maxNits, curNits);
 
-          avgCLL += curCLL;
+          avgNits += curNits;
 
-          if (curCLL < minCLL)
-            minCLL = curCLL;
+          minNits = min(minNits, curNits);
         }
 
-        avgCLL /= HEIGHT1;
+        avgNits /= HEIGHT1;
 
-        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL1(ID.x), maxCLL);
-        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL1(ID.x), avgCLL);
-        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL1(ID.x), minCLL);
+        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS1(ID.x), maxNits);
+        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS1(ID.x), avgNits);
+        tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS1(ID.x), minNits);
+
+        barrier();
       }
 
 #ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
 
-  }
+    }
 
 #endif
   }
 }
 
-void CS_GetMaxAvgMinCLL1_NEW(uint3 ID : SV_DispatchThreadID)
+void CS_GetMaxAvgMinNits1_NEW(uint3 ID : SV_DispatchThreadID)
 {
-  if (SHOW_CLL_VALUES)
+  if (SHOW_NITS_VALUES
+   || (SHOW_LUMINANCE_WAVEFORM
+    && (LUMINANCE_WAVEFORM_SHOW_MIN_NITS_LINE || LUMINANCE_WAVEFORM_SHOW_MAX_NITS_LINE)))
   {
     if (ID.x == 0)
     {
       if (ID.y == 0)
       {
-        float maxCLL = 0.f;
-        float avgCLL = 0.f;
-        float minCLL = 65504.f;
+        float maxNits = 0.f;
+        float avgNits = 0.f;
+        float minNits = FP32_MAX;
 
         for(uint x = 0; x < WIDTH0; x++)
         {
-          float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL0(x));
-          float curAvgCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL0(x));
-          float curMinCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL0(x));
+          const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS0(x));
+          const float curAvgNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS0(x));
+          const float curMinNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS0(x));
 
-          if (curMaxCLL > maxCLL)
-            maxCLL = curMaxCLL;
+          maxNits = max(maxNits, curMaxNits);
 
-          avgCLL += curAvgCLL;
+          avgNits += curAvgNits;
 
-          if (curMinCLL < minCLL)
-            minCLL = curMinCLL;
+          minNits = min(minNits, curMinNits);
         }
 
-        avgCLL /= WIDTH0;
+        avgNits /= WIDTH0;
+
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE0, maxNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE0, avgNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE0, minNits);
 
         barrier();
-
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE0, maxCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE0, avgCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE0, minCLL);
 
         return;
       }
       else
       {
-        float maxCLL = 0.f;
-        float avgCLL = 0.f;
-        float minCLL = 65504.f;
+        float maxNits = 0.f;
+        float avgNits = 0.f;
+        float minNits = FP32_MAX;
 
         for(uint x = 0; x < WIDTH0; x++)
         {
-          float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL1(x));
-          float curAvgCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL1(x));
-          float curMinCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL1(x));
+          const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS1(x));
+          const float curAvgNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS1(x));
+          const float curMinNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS1(x));
 
-          if (curMaxCLL > maxCLL)
-            maxCLL = curMaxCLL;
+          maxNits = max(maxNits, curMaxNits);
 
-          avgCLL += curAvgCLL;
+          avgNits += curAvgNits;
 
-          if (curMinCLL < minCLL)
-            minCLL = curMinCLL;
+          minNits = min(minNits, curMinNits);
         }
 
-        avgCLL /= WIDTH0;
+        avgNits /= WIDTH0;
+
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE1, maxNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE1, avgNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE1, minNits);
 
         barrier();
-
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE1, maxCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE1, avgCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE1, minCLL);
 
         return;
       }
@@ -1231,63 +1639,59 @@ void CS_GetMaxAvgMinCLL1_NEW(uint3 ID : SV_DispatchThreadID)
     {
       if (ID.y == 0)
       {
-        float maxCLL = 0.f;
-        float avgCLL = 0.f;
-        float minCLL = 65504.f;
+        float maxNits = 0.f;
+        float avgNits = 0.f;
+        float minNits = FP32_MAX;
 
         for(uint x = WIDTH0; x < BUFFER_WIDTH; x++)
         {
-          float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL0(x));
-          float curAvgCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL0(x));
-          float curMinCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL0(x));
+          const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS0(x));
+          const float curAvgNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS0(x));
+          const float curMinNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS0(x));
 
-          if (curMaxCLL > maxCLL)
-            maxCLL = curMaxCLL;
+          maxNits = max(maxNits, curMaxNits);
 
-          avgCLL += curAvgCLL;
+          avgNits += curAvgNits;
 
-          if (curMinCLL < minCLL)
-            minCLL = curMinCLL;
+          minNits = min(minNits, curMinNits);
         }
 
-        avgCLL /= WIDTH1;
+        avgNits /= WIDTH1;
+
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE2, maxNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE2, avgNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE2, minNits);
 
         barrier();
-
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE2, maxCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE2, avgCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE2, minCLL);
 
         return;
       }
       else
       {
-        float maxCLL = 0.f;
-        float avgCLL = 0.f;
-        float minCLL = 65504.f;
+        float maxNits = 0.f;
+        float avgNits = 0.f;
+        float minNits = FP32_MAX;
 
         for(uint x = WIDTH0; x < BUFFER_WIDTH; x++)
         {
-          float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL1(x));
-          float curAvgCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVGCLL1(x));
-          float curMinCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MINCLL1(x));
+          const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS1(x));
+          const float curAvgNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_AVG_NITS1(x));
+          const float curMinNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MIN_NITS1(x));
 
-          if (curMaxCLL > maxCLL)
-            maxCLL = curMaxCLL;
+          maxNits = max(maxNits, curMaxNits);
 
-          avgCLL += curAvgCLL;
+          avgNits += curAvgNits;
 
-          if (curMinCLL < minCLL)
-            minCLL = curMinCLL;
+          minNits = min(minNits, curMinNits);
         }
 
-        avgCLL /= WIDTH1;
+        avgNits /= WIDTH1;
+
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE3, maxNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE3, avgNits);
+        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE3, minNits);
 
         barrier();
-
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE3, maxCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE3, avgCLL);
-        tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE3, minCLL);
 
         return;
       }
@@ -1295,44 +1699,46 @@ void CS_GetMaxAvgMinCLL1_NEW(uint3 ID : SV_DispatchThreadID)
   }
 }
 
-void CS_GetFinalMaxAvgMinCLL_NEW(uint3 ID : SV_DispatchThreadID)
+void CS_GetFinalMaxAvgMinNits_NEW(uint3 ID : SV_DispatchThreadID)
 {
-  if (SHOW_CLL_VALUES)
+  if (SHOW_NITS_VALUES
+   || (SHOW_LUMINANCE_WAVEFORM
+    && (LUMINANCE_WAVEFORM_SHOW_MIN_NITS_LINE || LUMINANCE_WAVEFORM_SHOW_MAX_NITS_LINE)))
   {
-    float maxCLL0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE0);
-    float maxCLL1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE1);
-    float maxCLL2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE2);
-    float maxCLL3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE3);
+    const float maxNits0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE0);
+    const float maxNits1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE1);
+    const float maxNits2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE2);
+    const float maxNits3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE3);
 
-    float maxCLL = max(max(max(maxCLL0, maxCLL1), maxCLL2), maxCLL3);
-
-
-    float avgCLL0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE0);
-    float avgCLL1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE1);
-    float avgCLL2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE2);
-    float avgCLL3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVGCLL_VALUE3);
-
-    float avgCLL = (avgCLL0 + avgCLL1 + avgCLL2 + avgCLL3) / 4.f;
+    const float maxNits = max(max(max(maxNits0, maxNits1), maxNits2), maxNits3);
 
 
-    float minCLL0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE0);
-    float minCLL1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE1);
-    float minCLL2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE2);
-    float minCLL3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MINCLL_VALUE3);
+    const float avgNits0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE0);
+    const float avgNits1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE1);
+    const float avgNits2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE2);
+    const float avgNits3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_AVG_NITS_VALUE3);
 
-    float minCLL = min(min(min(minCLL0, minCLL1), minCLL2), minCLL3);
+    const float avgNits = (avgNits0 + avgNits1 + avgNits2 + avgNits3) / 4.f;
+
+
+    const float minNits0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE0);
+    const float minNits1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE1);
+    const float minNits2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE2);
+    const float minNits3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MIN_NITS_VALUE3);
+
+    const float minNits = min(min(min(minNits0, minNits1), minNits2), minNits3);
+
+    tex2Dstore(StorageConsolidated, COORDS_MAX_NITS_VALUE, maxNits);
+    tex2Dstore(StorageConsolidated, COORDS_AVG_NITS_VALUE, avgNits);
+    tex2Dstore(StorageConsolidated, COORDS_MIN_NITS_VALUE, minNits);
 
     barrier();
-
-    tex2Dstore(StorageConsolidated, COORDS_MAXCLL_VALUE, maxCLL);
-    tex2Dstore(StorageConsolidated, COORDS_AVGCLL_VALUE, avgCLL);
-    tex2Dstore(StorageConsolidated, COORDS_MINCLL_VALUE, minCLL);
   }
 }
 
 #endif //HDR_ANALYSIS_ENABLE
 
-void CS_GetMaxCll0_NEW(uint3 ID : SV_DispatchThreadID)
+void CS_GetMaxNits0_NEW(uint3 ID : SV_DispatchThreadID)
 {
 #ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
 
@@ -1343,31 +1749,33 @@ void CS_GetMaxCll0_NEW(uint3 ID : SV_DispatchThreadID)
 
     if(ID.y == 0)
     {
-      float maxCLL = 0.f;
+      float maxNits = 0.f;
 
       for (uint y = 0; y < HEIGHT0; y++)
       {
-        float curCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+        const float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 
-        if (curCLL > maxCLL)
-          maxCLL = curCLL;
+        maxNits = max(maxNits, curNits);
       }
 
-      tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL0(ID.x), maxCLL);
+      tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS0(ID.x), maxNits);
+
+      barrier();
     }
     else
     {
-      float maxCLL = 0.f;
+      float maxNits = 0.f;
 
       for (uint y = HEIGHT0; y < BUFFER_HEIGHT; y++)
       {
-        float curCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+        const float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 
-        if (curCLL > maxCLL)
-          maxCLL = curCLL;
+        maxNits = max(maxNits, curNits);
       }
 
-      tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL1(ID.x), maxCLL);
+      tex2Dstore(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS1(ID.x), maxNits);
+
+      barrier();
     }
 
 #ifndef WIDTH1_DISPATCH_DOESNT_OVERFLOW
@@ -1377,138 +1785,134 @@ void CS_GetMaxCll0_NEW(uint3 ID : SV_DispatchThreadID)
 #endif
 }
 
-void CS_GetMaxCll1_NEW(uint3 ID : SV_DispatchThreadID)
+void CS_GetMaxNits1_NEW(uint3 ID : SV_DispatchThreadID)
 {
   if (ID.x == 0)
   {
     if (ID.y == 0)
     {
-      float maxCLL = 0.f;
+      float maxNits = 0.f;
 
       for(uint x = 0; x < WIDTH0; x++)
       {
-        float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL0(x));
+        const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS0(x));
 
-        if (curMaxCLL > maxCLL)
-          maxCLL = curMaxCLL;
+        maxNits = max(maxNits, curMaxNits);
       }
 
-      barrier();
+      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE0, maxNits);
 
-      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE0, maxCLL);
+      barrier();
     }
     else
     {
-      float maxCLL = 0.f;
+      float maxNits = 0.f;
 
       for(uint x = 0; x < WIDTH0; x++)
       {
-        float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL1(x));
+        const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS1(x));
 
-        if (curMaxCLL > maxCLL)
-          maxCLL = curMaxCLL;
+        maxNits = max(maxNits, curMaxNits);
       }
 
-      barrier();
+      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE1, maxNits);
 
-      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE1, maxCLL);
+      barrier();
     }
   }
   else
   {
     if (ID.y == 0)
     {
-      float maxCLL = 0.f;
+      float maxNits = 0.f;
 
       for(uint x = WIDTH0; x < BUFFER_WIDTH; x++)
       {
-        float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL0(x));
+        const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS0(x));
 
-        if (curMaxCLL > maxCLL)
-          maxCLL = curMaxCLL;
+        maxNits = max(maxNits, curMaxNits);
       }
 
-      barrier();
+      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE2, maxNits);
 
-      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE2, maxCLL);
+      barrier();
     }
     else
     {
-      float maxCLL = 0.f;
+      float maxNits = 0.f;
 
       for(uint x = WIDTH0; x < BUFFER_WIDTH; x++)
       {
-        float curMaxCLL = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAXCLL1(x));
+        const float curMaxNits = tex2Dfetch(StorageConsolidated, COORDS_INTERMEDIATE_MAX_NITS1(x));
 
-        if (curMaxCLL > maxCLL)
-          maxCLL = curMaxCLL;
+        maxNits = max(maxNits, curMaxNits);
       }
 
-      barrier();
+      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE3, maxNits);
 
-      tex2Dstore(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE3, maxCLL);
+      barrier();
     }
   }
 }
 
-void CS_GetFinalMaxCll_NEW(uint3 ID : SV_DispatchThreadID)
+void CS_GetFinalMaxNits_NEW(uint3 ID : SV_DispatchThreadID)
 {
-  float maxCLL0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE0);
-  float maxCLL1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE1);
-  float maxCLL2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE2);
-  float maxCLL3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAXCLL_VALUE3);
+  const float maxNits0 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE0);
+  const float maxNits1 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE1);
+  const float maxNits2 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE2);
+  const float maxNits3 = tex2Dfetch(StorageConsolidated, COORDS_FINAL_4_MAX_NITS_VALUE3);
 
-  float maxCLL = max(max(max(maxCLL0, maxCLL1), maxCLL2), maxCLL3);
+  const float maxNits = max(max(max(maxNits0, maxNits1), maxNits2), maxNits3);
+
+  tex2Dstore(StorageConsolidated, COORDS_MAX_NITS_VALUE, maxNits);
 
   barrier();
-
-  tex2Dstore(StorageConsolidated, COORDS_MAXCLL_VALUE, maxCLL);
 }
 
 
-#undef COORDS_INTERMEDIATE_MAXCLL0
-#undef COORDS_INTERMEDIATE_AVGCLL0
-#undef COORDS_INTERMEDIATE_MINCLL0
-#undef COORDS_INTERMEDIATE_MAXCLL1
-#undef COORDS_INTERMEDIATE_AVGCLL1
-#undef COORDS_INTERMEDIATE_MINCLL1
+#undef COORDS_INTERMEDIATE_MAX_NITS0
+#undef COORDS_INTERMEDIATE_AVG_NITS0
+#undef COORDS_INTERMEDIATE_MIN_NITS0
+#undef COORDS_INTERMEDIATE_MAX_NITS1
+#undef COORDS_INTERMEDIATE_AVG_NITS1
+#undef COORDS_INTERMEDIATE_MIN_NITS1
 
-#ifdef HDR_ANALYSIS_ENABLE
+#if defined(HDR_ANALYSIS_ENABLE)
 
 // per column first
 //void CS_GetAvgCll0(uint3 ID : SV_DispatchThreadID)
 //{
 //  if (ID.x < BUFFER_WIDTH)
 //  {
-//    float avgCLL = 0.f;
+//    float avgNits = 0.f;
 //
 //    for(uint y = 0; y < BUFFER_HEIGHT; y++)
 //    {
-//      float CurCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+//      float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 //
-//      avgCLL += CurCLL;
+//      avgNits += curNits;
 //    }
 //
-//    avgCLL /= BUFFER_HEIGHT;
+//    avgNits /= BUFFER_HEIGHT;
 //
-//    tex2Dstore(Storage_Intermediate_CLL_Values, int2(ID.x, 1), avgCLL);
+//    tex2Dstore(Storage_Intermediate_CLL_Values, int2(ID.x, 1), avgNits);
 //  }
 //}
 //
 //void CS_GetAvgCll1(uint3 ID : SV_DispatchThreadID)
 //{
-//  float avgCLL = 0.f;
+//  float avgNits = 0.f;
 //
 //  for(uint x = 0; x < BUFFER_WIDTH; x++)
 //  {
-//    float CurCLL = tex2Dfetch(Sampler_Intermediate_CLL_Values, int2(x, 1)).r;
+//    float curNits = tex2Dfetch(Sampler_Intermediate_CLL_Values, int2(x, 1)).r;
 //
-//    avgCLL += CurCLL;
+//    avgNits += curNits;
 //  }
 //
-//  avgCLL /= BUFFER_WIDTH;
+//  avgNits /= BUFFER_WIDTH;
 //
-//  tex2Dstore(Storage_Max_Avg_Min_CLL_Values, int2(1, 0), avgCLL);
+//  tex2Dstore(Storage_Max_Avg_Min_CLL_Values, int2(1, 0), avgNits);
 //}
 //
 //
@@ -1517,66 +1921,50 @@ void CS_GetFinalMaxCll_NEW(uint3 ID : SV_DispatchThreadID)
 //{
 //  if (ID.x < BUFFER_WIDTH)
 //  {
-//    float minCLL = 65504.f;
+//    float minNits = 65504.f;
 //
 //    for(uint y = 0; y < BUFFER_HEIGHT; y++)
 //    {
-//      float CurCLL = tex2Dfetch(SamplerCllValues, int2(ID.x, y)).r;
+//      float curNits = tex2Dfetch(StorageNitsValues, int2(ID.x, y)).r;
 //
-//      if (CurCLL < minCLL)
-//        minCLL = CurCLL;
+//      if (curNits < minNits)
+//        minNits = curNits;
 //    }
 //
-//    tex2Dstore(Storage_Intermediate_CLL_Values, int2(ID.x, 2), minCLL);
+//    tex2Dstore(Storage_Intermediate_CLL_Values, int2(ID.x, 2), minNits);
 //  }
 //}
 //
 //void CS_GetMinCll1(uint3 ID : SV_DispatchThreadID)
 //{
-//  float minCLL = 65504.f;
+//  float minNits = 65504.f;
 //
 //  for(uint x = 0; x < BUFFER_WIDTH; x++)
 //  {
-//    float CurCLL = tex2Dfetch(Sampler_Intermediate_CLL_Values, int2(x, 2)).r;
+//    float curNits = tex2Dfetch(Sampler_Intermediate_CLL_Values, int2(x, 2)).r;
 //
-//    if (CurCLL < minCLL)
-//      minCLL = CurCLL;
+//    if (curNits < minNits)
+//      minNits = curNits;
 //  }
 //
-//  tex2Dstore(Storage_Max_Avg_Min_CLL_Values, int2(2, 0), minCLL);
+//  tex2Dstore(Storage_Max_Avg_Min_CLL_Values, int2(2, 0), minNits);
 //}
 
 
 // copy over clean bg first every time
-#if (CIE_DIAGRAM == CIE_1931)
-void PS_CopyCie1931Bg(
-      float4 VPos     : SV_Position,
-      float2 TexCoord : TEXCOORD,
-  out float4 CIE_BG   : SV_TARGET)
+void PS_CopyCieBg(
+  in  float4 VPos     : SV_Position,
+  in  float2 TexCoord : TEXCOORD0,
+  out float4 Out      : SV_Target0)
 {
-  if (SHOW_CIE)
-  {
-    CIE_BG = tex2D(SamplerCie1931BlackBg, TexCoord).rgba;
-    return;
-  }
-  discard;
-}
-#endif
+  float2 samplerPos = float2(VPos.x + CIE_BG_WIDTH[CIE_DIAGRAM_TYPE] * float(CIE_TEXTURE_ENTRY_DIAGRAM_BLACK_BG),
+                             VPos.y + float(CIE_1931_BG_HEIGHT)      * float(CIE_DIAGRAM_TYPE));
 
-#if (CIE_DIAGRAM == CIE_1976)
-void PS_CopyCie1976Bg(
-      float4 VPos     : SV_Position,
-      float2 TexCoord : TEXCOORD,
-  out float4 CIE_BG   : SV_TARGET)
-{
-  if (SHOW_CIE)
-  {
-    CIE_BG = tex2D(SamplerCie1976BlackBg, TexCoord).rgba;
-    return;
-  }
-  discard;
+  samplerPos /= CIE_CONSOLIDATED_TEXTURE_SIZE;
+
+  Out = tex2D(SamplerCieConsolidated, samplerPos);
+  return;
 }
-#endif
 
 void CS_GenerateCieDiagram(uint3 ID : SV_DispatchThreadID)
 {
@@ -1605,9 +1993,7 @@ void CS_GenerateCieDiagram(uint3 ID : SV_DispatchThreadID)
 
       precise const float3 pixel = tex2Dfetch(ReShade::BackBuffer, ID.xy).rgb;
 
-      if (pixel.r == 0.f
-       && pixel.g == 0.f
-       && pixel.b == 0.f)
+      if (all(pixel == 0.f))
       {
         return;
       }
@@ -1619,11 +2005,11 @@ void CS_GenerateCieDiagram(uint3 ID : SV_DispatchThreadID)
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
 
-      precise const float3 XYZ = Csp::Mat::Bt2020To::XYZ(Csp::Trc::FromPq(pixel));
+      precise const float3 XYZ = Csp::Mat::Bt2020To::XYZ(Csp::Trc::PqTo::Linear(pixel));
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
 
-      precise const float3 XYZ = Csp::Mat::Bt2020To::XYZ(Csp::Trc::FromHlg(pixel));
+      precise const float3 XYZ = Csp::Mat::Bt2020To::XYZ(Csp::Trc::HlgTo::Linear(pixel));
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
 
@@ -1635,37 +2021,71 @@ void CS_GenerateCieDiagram(uint3 ID : SV_DispatchThreadID)
 
 #endif
 
-#if (CIE_DIAGRAM == CIE_1931)
-      // get xy
-      precise const float xyz = XYZ.x + XYZ.y + XYZ.z;
+//ignore negative luminance in float based colour spaces
+#if (ACTUAL_COLOUR_SPACE == CSP_SCRGB \
+  || ACTUAL_COLOUR_SPACE == CSP_PS5)
 
-      precise const int2 xy = int2(round(XYZ.x / xyz * 1000.f) - 1,  // 1000 is the original texture size
-             CIE_1931_HEIGHT - 1 - round(XYZ.y / xyz * 1000.f) - 1);
+      if (XYZ.y <= 0.f)
+      {
+        return;
+      }
 
-      // adjust for the added borders
-      precise const int2 xyDiagramPos = int2(xy.x + CIE_BG_BORDER, xy.y + CIE_BG_BORDER);
-
-      tex2Dstore(StorageCie1931Current,
-                 xyDiagramPos,
-                 tex2Dfetch(SamplerCie1931, xy).rgba);
 #endif
 
-#if (CIE_DIAGRAM == CIE_1976)
-      // get u'v'
-      precise const float X15Y3Z = XYZ.x
-                                 + 15.f * XYZ.y
-                                 +  3.f * XYZ.z;
+      if (CIE_DIAGRAM_TYPE == CIE_1931)
+      {
+        // get xy
+        precise const float xyz = XYZ.x + XYZ.y + XYZ.z;
 
-      precise const int2 uv = int2(round(4.f * XYZ.x / X15Y3Z * 1000.f) - 1,  // 1000 is the original texture size
-             CIE_1976_HEIGHT - 1 - round(9.f * XYZ.y / X15Y3Z * 1000.f) - 1);
+        precise int2 xy = int2(round(XYZ.x / xyz * float(CIE_ORIGINAL_DIM)),
+         CIE_1931_HEIGHT - 1 - round(XYZ.y / xyz * float(CIE_ORIGINAL_DIM)));
 
-      // adjust for the added borders
-      precise const int2 uvDiagramPos = int2(uv.x + CIE_BG_BORDER, uv.y + CIE_BG_BORDER);
+        // adjust for the added borders
+        xy += CIE_BG_BORDER;
 
-      tex2Dstore(StorageCie1976Current,
-                 uvDiagramPos,
-                 tex2Dfetch(SamplerCie1976, uv).rgba);
-#endif
+        // clamp to to borders
+        xy = clamp(xy, CIE_BG_BORDER, CIE_1931_SIZE + CIE_BG_BORDER);
+
+        // leave this as sampler and not storage
+        // otherwise d3d about the resource still being bound in input
+        // D3D11 WARNING: ID3D11DeviceContext::CSSetUnorderedAccessViews:
+        // Resource being set to CS UnorderedAccessView slot 3 is still bound on input!
+        // [ STATE_SETTING WARNING #2097354: DEVICE_CSSETUNORDEREDACCESSVIEWS_HAZARD]
+        const float4 xyColour = tex2Dfetch(SamplerCieConsolidated, xy);
+
+        tex2Dstore(StorageCieCurrent,
+                   xy,
+                   xyColour);
+      }
+      else if (CIE_DIAGRAM_TYPE == CIE_1976)
+      {
+        // get u'v'
+        precise const float X15Y3Z = XYZ.x
+                                   + 15.f * XYZ.y
+                                   +  3.f * XYZ.z;
+
+        precise int2 uv = int2(round(4.f * XYZ.x / X15Y3Z * float(CIE_ORIGINAL_DIM)),
+         CIE_1976_HEIGHT - 1 - round(9.f * XYZ.y / X15Y3Z * float(CIE_ORIGINAL_DIM)));
+
+        // adjust for the added borders
+        uv += CIE_BG_BORDER;
+
+        // clamp to to borders
+        uv = clamp(uv, CIE_BG_BORDER, CIE_1976_SIZE + CIE_BG_BORDER);
+
+        const int2 uvFetchPos = int2(uv.x, uv.y + CIE_1931_BG_HEIGHT);
+
+        // leave this as sampler and not storage
+        // otherwise d3d about the resource still being bound in input
+        // D3D11 WARNING: ID3D11DeviceContext::CSSetUnorderedAccessViews:
+        // Resource being set to CS UnorderedAccessView slot 3 is still bound on input!
+        // [ STATE_SETTING WARNING #2097354: DEVICE_CSSETUNORDEREDACCESSVIEWS_HAZARD]
+        const float4 uvColour = tex2Dfetch(SamplerCieConsolidated, uvFetchPos);
+
+        tex2Dstore(StorageCieCurrent,
+                   uv,
+                   uvColour);
+      }
 
 #if (!defined(WIDTH1_DISPATCH_DOESNT_OVERFLOW)  && !defined(HEIGHT1_DISPATCH_DOESNT_OVERFLOW)) \
  || (!defined(WIDTH1_DISPATCH_DOESNT_OVERFLOW)  &&  defined(HEIGHT1_DISPATCH_DOESNT_OVERFLOW)) \
@@ -1677,166 +2097,137 @@ void CS_GenerateCieDiagram(uint3 ID : SV_DispatchThreadID)
   }
 }
 
-bool IsCSP(precise float3 RGB)
+bool IsCsp(precise float3 Rgb)
 {
-  if ((SHOW_CSPS || SHOW_CSP_MAP || SHOW_CSP_FROM_CURSOR)
-   && RGB.r >= 0.f
-   && RGB.g >= 0.f
-   && RGB.b >= 0.f)
+  if (all(Rgb >= 0.f))
   {
     return true;
   }
   return false;
 }
 
-float GetCSP(precise float3 XYZ)
+#if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
+
+  #define _IS_CSP_BT709(Rgb)  Rgb
+  #define _IS_CSP_DCI_P3(Rgb) Csp::Mat::Bt709To::DciP3(Rgb)
+  #define _IS_CSP_BT2020(Rgb) Csp::Mat::Bt709To::Bt2020(Rgb)
+  #define _IS_CSP_AP0(Rgb)    Csp::Mat::Bt709To::Ap0D65(Rgb)
+
+#elif (defined(IS_HDR10_LIKE_CSP) \
+    || ACTUAL_COLOUR_SPACE == CSP_PS5)
+
+  #define _IS_CSP_BT709(Rgb)  Csp::Mat::Bt2020To::Bt709(Rgb)
+  #define _IS_CSP_DCI_P3(Rgb) Csp::Mat::Bt2020To::DciP3(Rgb)
+  #define _IS_CSP_BT2020(Rgb) Rgb
+  #define _IS_CSP_AP0(Rgb)    Csp::Mat::Bt2020To::Ap0D65(Rgb)
+
+#endif
+
+float GetCsp(precise float3 Rgb)
 {
-  if (SHOW_CSPS
-   || SHOW_CSP_MAP
-   || SHOW_CSP_FROM_CURSOR)
+  if (IsCsp(_IS_CSP_BT709(Rgb)))
   {
-    if (IsCSP(Csp::Mat::XYZTo::Bt709(XYZ)))
-    {
-      return IS_CSP_BT709;
-    }
-    else if (IsCSP(Csp::Mat::XYZTo::DciP3(XYZ)))
-    {
-      return IS_CSP_DCI_P3 / 255.f;
-    }
+    return IS_CSP_BT709;
+  }
+  else if (IsCsp(_IS_CSP_DCI_P3(Rgb)))
+  {
+    return IS_CSP_DCI_P3 / 255.f;
+  }
 
-#ifdef IS_HDR10_LIKE_CSP
+#if defined(IS_HDR10_LIKE_CSP)
 
-    else
-    {
-      return IS_CSP_BT2020 / 255.f;
-    }
+  else
+  {
+    return IS_CSP_BT2020 / 255.f;
+  }
 
 #else
 
-    else if (IsCSP(Csp::Mat::XYZTo::Bt2020(XYZ)))
-    {
-      return IS_CSP_BT2020 / 255.f;
-    }
-    else if (IsCSP(Csp::Mat::XYZTo::AP0(XYZ)))
-    {
-      return IS_CSP_AP0 / 255.f;
-    }
-    else
-    {
-      return IS_CSP_INVALID / 255.f;
-    }
+  else if (IsCsp(_IS_CSP_BT2020(Rgb)))
+  {
+    return IS_CSP_BT2020 / 255.f;
+  }
+  else if (IsCsp(_IS_CSP_AP0(Rgb)))
+  {
+    return IS_CSP_AP0 / 255.f;
+  }
+  else
+  {
+    return IS_CSP_INVALID / 255.f;
+  }
 
 #endif //IS_HDR10_LIKE_CSP
-  }
+
   return IS_CSP_INVALID / 255.f;
 }
 
 void PS_CalcCsps(
               float4 VPos     : SV_Position,
               float2 TexCoord : TEXCOORD,
-  out precise float  curCSP   : SV_TARGET)
+  out precise float  CurCsp   : SV_TARGET)
 {
+  CurCsp = 0.f;
+
   if (SHOW_CSPS
-   || SHOW_CSP_MAP
-   || SHOW_CSP_FROM_CURSOR)
+   || SHOW_CSP_FROM_CURSOR
+   || SHOW_CSP_MAP)
   {
     precise const float3 pixel = tex2D(ReShade::BackBuffer, TexCoord).rgb;
 
-#if (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
+#if defined(IS_FLOAT_HDR_CSP)
 
 #if (IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION == YES)
 
-    if (!(pixel.r > -SMALLEST_FP16 && pixel.r < SMALLEST_FP16
-       || pixel.g > -SMALLEST_FP16 && pixel.g < SMALLEST_FP16
-       || pixel.b > -SMALLEST_FP16 && pixel.b < SMALLEST_FP16))
+    const float3 absPixel = abs(pixel);
+    if (absPixel.r > SMALLEST_FP16
+     && absPixel.g > SMALLEST_FP16
+     && absPixel.b > SMALLEST_FP16)
     {
-      curCSP = GetCSP(Csp::Mat::Bt709To::XYZ(pixel));
+      CurCsp = GetCsp(pixel);
     }
     else
     {
-      curCSP = IS_CSP_BT709 / 255.f;
+      CurCsp = IS_CSP_BT709 / 255.f;
     }
     return;
 
 #else
 
-    curCSP = GetCSP(Csp::Mat::Bt709To::XYZ(pixel));
+    CurCsp = GetCsp(pixel);
 
     return;
 
 #endif
 
-#elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
+#elif defined(IS_HDR10_LIKE_CSP)
 
 #if (IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION == YES)
 
-  precise const float3 curPixel = Csp::Trc::FromPq(pixel);
-
-    if (!(curPixel.r < SMALLEST_UINT10
-       && curPixel.g < SMALLEST_UINT10
-       && curPixel.b < SMALLEST_UINT10))
+    if (pixel.r > SMALLEST_UINT10
+     && pixel.g > SMALLEST_UINT10
+     && pixel.b > SMALLEST_UINT10)
     {
-      curCSP = GetCSP(Csp::Mat::Bt2020To::XYZ(curPixel));
-    }
-    else
-    {
-      curCSP = IS_CSP_BT709 / 255.f;
-    }
-    return;
-
-#else
-
-    curCSP = GetCSP(Csp::Mat::Bt2020To::XYZ(Csp::Trc::FromPq(pixel)));
-
-    return;
-
-#endif
-
+#if (ACTUAL_COLOUR_SPACE == CSP_HDR10)
+      precise const float3 curPixel = Csp::Trc::PqTo::Linear(pixel);
 #elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
-
-#if (IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION == YES)
-
-    precise const float3 curPixel = Csp::Trc::FromPq(pixel);
-
-    if (!(curPixel.r < SMALLEST_UINT10
-       && curPixel.g < SMALLEST_UINT10
-       && curPixel.b < SMALLEST_UINT10))
-    {
-      curCSP = GetCSP(Csp::Mat::Bt2020To::XYZ(Csp::Trc::FromHlg(curPixel)));
-    }
-    else
-    {
-      curCSP = IS_CSP_BT709 / 255.f;
-    }
-    return;
-
-#else
-
-    curCSP = GetCSP(Csp::Mat::Bt2020To::XYZ(Csp::Trc::FromHlg(pixel)));
-
-    return;
-
+      precise const float3 curPixel = Csp::Trc::HlgTo::Linear(pixel);
 #endif
-
-#elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
-
-#if (IGNORE_NEAR_BLACK_VALUES_FOR_CSP_DETECTION == YES)
-
-    if (!(pixel.r > -SMALLEST_FP16 && pixel.r < SMALLEST_FP16
-       && pixel.g > -SMALLEST_FP16 && pixel.g < SMALLEST_FP16
-       && pixel.b > -SMALLEST_FP16 && pixel.b < SMALLEST_FP16))
-    {
-      curCSP = GetCSP(Csp::Mat::Bt2020To::XYZ(pixel));
+      CurCsp = GetCsp(curPixel);
     }
     else
     {
-      curCSP = IS_CSP_BT709 / 255.f;
+      CurCsp = IS_CSP_BT709 / 255.f;
     }
     return;
 
 #else
 
-    curCSP = GetCSP(Csp::Mat::Bt2020To::XYZ(pixel));
+#if (ACTUAL_COLOUR_SPACE == CSP_HDR10)
+    precise const float3 curPixel = Csp::Trc::PqTo::Linear(pixel);
+#elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
+    precise const float3 curPixel = Csp::Trc::HlgTo::Linear(pixel);
+#endif
+    CurCsp = GetCsp(curPixel);
 
     return;
 
@@ -1844,7 +2235,7 @@ void PS_CalcCsps(
 
 #else
 
-    curCSP = IS_CSP_INVALID / 255.f;
+    CurCsp = IS_CSP_INVALID / 255.f;
 
     return;
 
@@ -1868,7 +2259,9 @@ void PS_CalcCsps(
 
 void CS_CountCspsY(uint3 ID : SV_DispatchThreadID)
 {
-  if (SHOW_CSPS)
+  if (SHOW_CSPS
+   || SHOW_CSP_FROM_CURSOR
+   || SHOW_CSP_MAP)
   {
 #ifndef WIDTH0_DISPATCH_DOESNT_OVERFLOW
 
@@ -1877,35 +2270,35 @@ void CS_CountCspsY(uint3 ID : SV_DispatchThreadID)
 
 #endif
 
-      precise uint counter_BT709   = 0;
-      precise uint counter_DCI_P3  = 0;
+      precise uint counter_BT709  = 0;
+      precise uint counter_DCI_P3 = 0;
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
-      precise uint counter_BT2020  = 0;
-      precise uint counter_AP0     = 0;
+      precise uint counter_BT2020 = 0;
+      precise uint counter_AP0    = 0;
 
 #endif //IS_FLOAT_HDR_CSP
 
       for (int y = 0; y < BUFFER_HEIGHT; y++)
       {
-        uint curCSP = uint(tex2Dfetch(SamplerCsps, int2(ID.x, y)).r * 255.f);
-        if (curCSP == IS_CSP_BT709)
+        uint curCsp = uint(tex2Dfetch(SamplerCsps, int2(ID.x, y)).r * 255.f);
+        if (curCsp == IS_CSP_BT709)
         {
           counter_BT709++;
         }
-        else if (curCSP == IS_CSP_DCI_P3)
+        else if (curCsp == IS_CSP_DCI_P3)
         {
           counter_DCI_P3++;
         }
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
-        else if (curCSP == IS_CSP_BT2020)
+        else if (curCsp == IS_CSP_BT2020)
         {
           counter_BT2020++;
         }
-        else if (curCSP == IS_CSP_AP0)
+        else if (curCsp == IS_CSP_AP0)
         {
           counter_AP0++;
         }
@@ -1916,7 +2309,7 @@ void CS_CountCspsY(uint3 ID : SV_DispatchThreadID)
       tex2Dstore(StorageConsolidated, COORDS_CSP_COUNTER_BT709(ID.x),  counter_BT709);
       tex2Dstore(StorageConsolidated, COORDS_CSP_COUNTER_DCI_P3(ID.x), counter_DCI_P3);
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
       tex2Dstore(StorageConsolidated, COORDS_CSP_COUNTER_BT2020(ID.x), counter_BT2020);
       tex2Dstore(StorageConsolidated, COORDS_CSP_COUNTER_AP0(ID.x),    counter_AP0);
@@ -1933,12 +2326,14 @@ void CS_CountCspsY(uint3 ID : SV_DispatchThreadID)
 
 void CS_CountCspsX(uint3 ID : SV_DispatchThreadID)
 {
-  if (SHOW_CSPS)
+  if (SHOW_CSPS
+   || SHOW_CSP_FROM_CURSOR
+   || SHOW_CSP_MAP)
   {
     precise uint counter_BT709  = 0;
     precise uint counter_DCI_P3 = 0;
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
     precise uint counter_BT2020 = 0;
     precise uint counter_AP0    = 0;
@@ -1947,13 +2342,13 @@ void CS_CountCspsX(uint3 ID : SV_DispatchThreadID)
 
     for (int x = 0; x < BUFFER_WIDTH; x++)
     {
-      counter_BT709   += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_BT709(x)));
-      counter_DCI_P3  += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_DCI_P3(x)));
+      counter_BT709  += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_BT709(x)));
+      counter_DCI_P3 += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_DCI_P3(x)));
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
-      counter_BT2020  += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_BT2020(x)));
-      counter_AP0     += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_AP0(x)));
+      counter_BT2020 += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_BT2020(x)));
+      counter_AP0    += uint(tex2Dfetch(StorageConsolidated, COORDS_CSP_COUNTER_AP0(x)));
 
 #endif //IS_FLOAT_HDR_CSP
     }
@@ -1965,7 +2360,7 @@ void CS_CountCspsX(uint3 ID : SV_DispatchThreadID)
     tex2Dstore(StorageConsolidated, COORDS_CSP_PERCENTAGE_BT709,  percentageBt709);
     tex2Dstore(StorageConsolidated, COORDS_CSP_PERCENTAGE_DCI_P3, percentageDciP3);
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
     precise float percentageBt2020 = counter_BT2020 / PIXELS;
     precise float percentageAp0    = counter_AP0    / PIXELS;
@@ -1976,8 +2371,8 @@ void CS_CountCspsX(uint3 ID : SV_DispatchThreadID)
   }
 }
 
-float3 Create_CSP_Map(
-  uint  CSP,
+float3 CreateCspMap(
+  uint  Csp,
   float Y)
 //  float WhitePoint)
 {
@@ -1985,12 +2380,12 @@ float3 Create_CSP_Map(
   {
     float3 output;
 
-    if (CSP != IS_CSP_BT709)
+    if (Csp != IS_CSP_BT709)
     {
       Y += 20.f;
     }
 
-    switch(CSP)
+    switch(Csp)
     {
       case IS_CSP_BT709:
       {
@@ -2036,11 +2431,11 @@ float3 Create_CSP_Map(
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HDR10)
 
-    output = Csp::Trc::ToPqFromNits(Csp::Mat::Bt709To::Bt2020(output));
+    output = Csp::Trc::NitsTo::Pq(Csp::Mat::Bt709To::Bt2020(output));
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_HLG)
 
-    output = Csp::Trc::ToHlgFromNits(Csp::Mat::Bt709To::Bt2020(output));
+    output = Csp::Trc::NitsTo::Hlg(Csp::Mat::Bt709To::Bt2020(output));
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_PS5)
 
@@ -2054,15 +2449,17 @@ float3 Create_CSP_Map(
 
 void ShowValuesCopy(uint3 ID : SV_DispatchThreadID)
 {
-  float pingpong = PINGPONG.x;
-  if (pingpong < 0.01f
-  || (pingpong > 0.32f && pingpong < 0.34f)
-  || (pingpong > 0.65f && pingpong < 0.67f)
-  ||  pingpong > 0.99f)
+  float frametimeCounter = tex2Dfetch(StorageConsolidated, COORDS_UPDATE_OVERLAY_PERCENTAGES);
+  frametimeCounter += FRAMETIME;
+
+  // only update every 1/2 of a second
+  if (frametimeCounter >= 500.f)
   {
-    float maxCLL = tex2Dfetch(StorageConsolidated, COORDS_MAXCLL_VALUE);
-    float avgCLL = tex2Dfetch(StorageConsolidated, COORDS_AVGCLL_VALUE);
-    float minCLL = tex2Dfetch(StorageConsolidated, COORDS_MINCLL_VALUE);
+    tex2Dstore(StorageConsolidated, COORDS_UPDATE_OVERLAY_PERCENTAGES, 0.f);
+
+    float maxNits = tex2Dfetch(StorageConsolidated, COORDS_MAX_NITS_VALUE);
+    float avgNits = tex2Dfetch(StorageConsolidated, COORDS_AVG_NITS_VALUE);
+    float minNits = tex2Dfetch(StorageConsolidated, COORDS_MIN_NITS_VALUE);
 
     precise float counter_BT709  = tex2Dfetch(StorageConsolidated, COORDS_CSP_PERCENTAGE_BT709)
 #if (__VENDOR__ == 0x1002)
@@ -2077,7 +2474,7 @@ void ShowValuesCopy(uint3 ID : SV_DispatchThreadID)
                                  * 100.f;
 #endif
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
     precise float counter_BT2020 = tex2Dfetch(StorageConsolidated, COORDS_CSP_PERCENTAGE_BT2020)
 #if (__VENDOR__ == 0x1002)
@@ -2094,7 +2491,7 @@ void ShowValuesCopy(uint3 ID : SV_DispatchThreadID)
 
 #endif //IS_FLOAT_HDR_CSP
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
     precise float counter_AP0     = tex2Dfetch(StorageConsolidated, COORDS_CSP_PERCENTAGE_AP0)
 #if (__VENDOR__ == 0x1002)
@@ -2112,21 +2509,25 @@ void ShowValuesCopy(uint3 ID : SV_DispatchThreadID)
 
     barrier();
 
-    tex2Dstore(StorageConsolidated, COORDS_SHOW_MAXCLL, maxCLL);
-    tex2Dstore(StorageConsolidated, COORDS_SHOW_AVGCLL, avgCLL);
-    tex2Dstore(StorageConsolidated, COORDS_SHOW_MINCLL, minCLL);
+    tex2Dstore(StorageConsolidated, COORDS_SHOW_MAX_NITS, maxNits);
+    tex2Dstore(StorageConsolidated, COORDS_SHOW_AVG_NITS, avgNits);
+    tex2Dstore(StorageConsolidated, COORDS_SHOW_MIN_NITS, minNits);
 
     tex2Dstore(StorageConsolidated, COORDS_SHOW_PERCENTAGE_BT709,  counter_BT709);
     tex2Dstore(StorageConsolidated, COORDS_SHOW_PERCENTAGE_DCI_P3, counter_DCI_P3);
     tex2Dstore(StorageConsolidated, COORDS_SHOW_PERCENTAGE_BT2020, counter_BT2020);
 
-#ifdef IS_FLOAT_HDR_CSP
+#if defined(IS_FLOAT_HDR_CSP)
 
     tex2Dstore(StorageConsolidated, COORDS_SHOW_PERCENTAGE_AP0,     counter_AP0);
     tex2Dstore(StorageConsolidated, COORDS_SHOW_PERCENTAGE_INVALID, counter_invalid);
 
 #endif //IS_FLOAT_HDR_CSP
 
+  }
+  else
+  {
+    tex2Dstore(StorageConsolidated, COORDS_UPDATE_OVERLAY_PERCENTAGES, frametimeCounter);
   }
   return;
 }

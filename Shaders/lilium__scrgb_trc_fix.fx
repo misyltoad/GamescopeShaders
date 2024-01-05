@@ -1,12 +1,8 @@
 #include "lilium__include/colour_space.fxh"
 
 
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
+#if (defined(IS_HDR_COMPATIBLE_API) \
   && defined(IS_POSSIBLE_HDR_CSP))
-
-// TODO:
-// - add namespace for UI
 
 
 uniform uint INPUT_TRC
@@ -86,20 +82,20 @@ void PS_ScrgbTrcFix(
 
   if (INPUT_TRC == TRC_SRGB)
   {
-    fixedGamma = Csp::Trc::FromExtendedSrgb(fixedGamma);
+    fixedGamma = Csp::Trc::ExtendedSrgbTo::Linear(fixedGamma);
   }
   else if (INPUT_TRC == TRC_GAMMA_22)
   {
-    fixedGamma = Csp::Trc::FromExtendedGamma22(fixedGamma);
+    fixedGamma = Csp::Trc::ExtendedGamma22To::Linear(fixedGamma);
   }
   else if (INPUT_TRC == TRC_GAMMA_24)
   {
-    fixedGamma = Csp::Trc::FromExtendedGamma24(fixedGamma);
+    fixedGamma = Csp::Trc::ExtendedGamma24To::Linear(fixedGamma);
   }
 #if (CSP_OVERRIDE != CSP_PS5)
   else if (INPUT_TRC == TRC_PQ)
   {
-    fixedGamma = Csp::Mat::Bt2020To::Bt709(Csp::Trc::FromPq(fixedGamma)) * 125.f;
+    fixedGamma = Csp::Mat::Bt2020To::Bt709(Csp::Trc::PqTo::Linear(fixedGamma)) * 125.f;
   }
 #endif
 
