@@ -3,8 +3,7 @@
 #include "colour_space.fxh"
 
 
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
+#if (defined(IS_HDR_COMPATIBLE_API) \
   && defined(IS_POSSIBLE_HDR_CSP))
 
 
@@ -37,10 +36,6 @@
 
 namespace Itmos
 {
-  //gamma
-  static const float removeGamma = 2.4f;
-  static const float applyGamma  = 1.f / removeGamma;
-
   // outputs normalised values
   float3 Bt2446A(
     float3 Input,
@@ -54,11 +49,11 @@ namespace Itmos
     float3 sdr = saturate(Input / InputNitsFactor);
 
     //RGB->R'G'B' gamma compression
-    sdr = pow(sdr, 1.f / (removeGamma + GammaIn));
+    sdr = pow(sdr, 1.f / (Csp::Trc::RemoveGamma24 + GammaIn));
 
     // Rec. ITU-R BT.2020-2 Table 4
     //Y'C'bC'r,tmo
-    float3 ycbcrTmo = Csp::Ycbcr::FromRgb::Bt2020(sdr);
+    float3 ycbcrTmo = Csp::Ycbcr::RgbTo::YcbcrBt2020(sdr);
 
     // adjusted luma component (inverse)
     // get Y'sdr
@@ -69,7 +64,7 @@ namespace Itmos
     float pSdr = 1.f + 32.f * pow(
                                   Lsdr /
                                   10000.f
-                              , applyGamma);
+                              , Csp::Trc::ApplyGamma24);
 
     //Y'c
     //if pSdr == 1 there is a division by zero
@@ -119,7 +114,7 @@ namespace Itmos
     float pHdr = 1.f + 32.f * pow(
                                   Lhdr /
                                   10000.f
-                              , applyGamma);
+                              , Csp::Trc::ApplyGamma24);
     //Y'hdr
     //if pHdr == 1 there is a division by zero
     //this happens when Lhdr == 0
@@ -148,13 +143,13 @@ namespace Itmos
     float cbHdr = ycbcrTmo.y / colourScale;
     float crHdr = ycbcrTmo.z / colourScale;
 
-    float3 hdr = Csp::Ycbcr::ToRgb::Bt2020(float3(yHdr, cbHdr, crHdr));
+    float3 hdr = Csp::Ycbcr::YcbcrTo::RgbBt2020(float3(yHdr, cbHdr, crHdr));
 
     hdr = max(hdr, 0.f); //on edge cases the YCbCr->RGB conversion isn't accurate enough
 
     // Non-linear transfer function (inverse)
     // get RGB
-    hdr = pow(hdr, removeGamma + GammaIn + GammaOut);
+    hdr = pow(hdr, Csp::Trc::RemoveGamma24 + GammaIn + GammaOut);
 
     //expand to target luminance
     hdr *= (Lhdr / 10000.f);
@@ -650,17 +645,17 @@ namespace Itmos
       float  ShoulderStart)
     {
 
-      float3x3 RgbToLms = Csp::Ictcp::Mat::Ap0D65ToLms;
-      float3x3 LmsToRgb = Csp::Ictcp::Mat::LmsToAp0D65;
-      float3   K_factors  = Csp::KHelpers::Ap0D65::K;
-      float    KR_helper  = Csp::KHelpers::Ap0D65::Kr;
-      float    KB_helper  = Csp::KHelpers::Ap0D65::Kb;
-      float2   KG_helper  = Csp::KHelpers::Ap0D65::Kg;
+      float3x3 RgbToLms  = Ap0D65ToLms;
+      float3x3 LmsToRgb  = LmsToAp0D65;
+      float3   K_factors = KAp0D65;
+      float    KR_helper = KrAp0D65;
+      float    KB_helper = KbAp0D65;
+      float2   KG_helper = KgAp0D65;
 
 
       float3 LMS = mul(RgbToLms, Input);
 
-      LMS = Csp::Trc::ToPq(LMS);
+      LMS = Csp::Trc::LinearTo::Pq(LMS);
 
       float I1 = 0.5f * LMS.x + 0.5f * LMS.y;
 
@@ -670,8 +665,8 @@ namespace Itmos
       }
       else
       {
-        float Ct1 = dot(LMS, Csp::Ictcp::Mat::PqLmsToIctcp[1]);
-        float Cp1 = dot(LMS, Csp::Ictcp::Mat::PqLmsToIctcp[2]);
+        float Ct1 = dot(LMS, PqLmsToIctcp[1]);
+        float Cp1 = dot(LMS, PqLmsToIctcp[2]);
 
         float I2 = LuminanceExpand(I1, MaxNits, ShoulderStart);
 
@@ -680,7 +675,7 @@ namespace Itmos
         //to L'M'S'
         LMS = Csp::Ictcp::Mat::IctcpTo::PqLms(float3(I2, min_I * Ct1, min_I * Cp1));
         //to LMS
-        LMS = Csp::Trc::FromPq(LMS);
+        LMS = Csp::Trc::PqTo::Linear(LMS);
         //to RGB
         return max(mul(LmsToRgb, LMS), 0.f);
       }

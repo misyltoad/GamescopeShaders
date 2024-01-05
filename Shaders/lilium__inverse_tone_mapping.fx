@@ -1,17 +1,11 @@
 #include "lilium__include/inverse_tone_mappers.fxh"
 
 
-#if (((__RENDERER__ >= 0xB000 && __RENDERER__ < 0x10000) \
-   || __RENDERER__ >= 0x20000)                           \
+#if (defined(IS_HDR_COMPATIBLE_API) \
   && defined(IS_POSSIBLE_HDR_CSP))
 
-// TODO:
-// - implement vertex shader for optimisation
-// - general clean up needed
-// - finish BT.2446 Method C
-// - LUT based inverse tone mapping
 
-#include "lilium__include/draw_text_fix.fxh"
+//#include "lilium__include/draw_text_fix.fxh"
 
 //#define ENABLE_DICE
 
@@ -300,17 +294,17 @@ void PS_InverseToneMapping(
   {
     case CONTENT_TRC_SRGB:
     {
-      hdr = Csp::Trc::FromExtendedSrgb(hdr);
+      hdr = Csp::Trc::ExtendedSrgbTo::Linear(hdr);
     }
     break;
     case CONTENT_TRC_GAMMA_22:
     {
-      hdr = Csp::Trc::FromExtendedGamma22(hdr);
+      hdr = Csp::Trc::ExtendedGamma22To::Linear(hdr);
     }
     break;
     case CONTENT_TRC_GAMMA_24:
     {
-      hdr = Csp::Trc::FromExtendedGamma24(hdr);
+      hdr = Csp::Trc::ExtendedGamma24To::Linear(hdr);
     }
     break;
     default:
@@ -372,11 +366,11 @@ void PS_InverseToneMapping(
 
     case ITM_METHOD_DICE_INVERSE:
     {
-      float target_CLL_normalised = Ui::Itm::Global::TargetBrightness / 10000.f;
+      float targetNitsNormalised = Ui::Itm::Global::TargetBrightness / 10000.f;
       hdr = Itmos::Dice::InverseToneMapper(
               hdr,
-              Csp::Trc::ToPqFromNits(Ui::Itm::Dice::DiceInputBrightness),
-              Csp::Trc::ToPqFromNits(Ui::Itm::Dice::ShoulderStart / 100.f * Ui::Itm::Dice::DiceInputBrightness));
+              Csp::Trc::NitsTo::Pq(Ui::Itm::Dice::DiceInputBrightness),
+              Csp::Trc::NitsTo::Pq(Ui::Itm::Dice::ShoulderStart / 100.f * Ui::Itm::Dice::DiceInputBrightness));
     } break;
 
 #endif //ENABLE_DICE
@@ -399,7 +393,7 @@ void PS_InverseToneMapping(
 
 #endif //ENABLE_DICE
 
-  hdr = Csp::Trc::ToPq(hdr);
+  hdr = Csp::Trc::LinearTo::Pq(hdr);
 
 #elif (ACTUAL_COLOUR_SPACE == CSP_SCRGB)
 
